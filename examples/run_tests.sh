@@ -167,6 +167,27 @@ run_uclient() {
     fi
 }
 
+run_uclient_expect_fail() {
+    local label="$1"
+    shift
+    echo "Running $label"
+    "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u user 127.0.0.1 > "$UCLIENT_LOG" 2>&1
+    if grep -q "start_mclient: tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000" "$UCLIENT_LOG"; then
+        echo FAIL
+        echo "Unexpected success for negative test: $label"
+        diagnose_failure "$label"
+        exit 1
+    fi
+    if grep -qiE "401|unauthor|integrity|error" "$UCLIENT_LOG"; then
+        echo OK
+    else
+        echo FAIL
+        echo "Negative test did not show an auth failure signature: $label"
+        diagnose_failure "$label"
+        exit 1
+    fi
+}
+
 # Legacy single-threaded uclient (no -K, no --sender-threads).
 run_uclient "turn client TCP"   -t
 run_uclient "turn client TLS"   -t -S
@@ -187,6 +208,11 @@ run_uclient "turn client TCP (threaded)"  -t      --listener-threads 1 --sender-
 run_uclient "turn client TLS (threaded)"  -t -S   --listener-threads 1 --sender-threads 1
 run_uclient "turn client UDP (threaded)"          --listener-threads 1 --sender-threads 1
 run_uclient "turn client DTLS (threaded)" -S      --listener-threads 1 --sender-threads 1
+
+# Shared-secret dual-mode coverage: accept SHA-256 auth and reject
+# mismatched secret while using SHA-256 MESSAGE-INTEGRITY.
+run_uclient "turn client UDP (REST auth sha256)" -A sha256
+run_uclient_expect_fail "turn client UDP (REST auth sha256 wrong secret)" -A sha256 -W badsecret
 
 # Linux-only load-gen smoke. Confirms -Y packet mode emits the recv_pps
 # metric introduced in #1913 alongside send_pps, and that both are

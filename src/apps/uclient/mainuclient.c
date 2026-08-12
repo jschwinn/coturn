@@ -132,6 +132,25 @@ static uclient_load_mode parse_load_mode(const char *mode) {
   return UCLIENT_LOAD_MODE_NONE;
 }
 
+static SHATYPE parse_shatype(const char *value) {
+  if (!value) {
+    return SHATYPE_ERROR;
+  }
+  if (!strcmp(value, "sha1")) {
+    return SHATYPE_SHA1;
+  }
+  if (!strcmp(value, "sha256")) {
+    return SHATYPE_SHA256;
+  }
+  if (!strcmp(value, "sha384")) {
+    return SHATYPE_SHA384;
+  }
+  if (!strcmp(value, "sha512")) {
+    return SHATYPE_SHA512;
+  }
+  return SHATYPE_ERROR;
+}
+
 static char Usage[] =
     "Usage: uclient [flags] [options] turn-server-ip-address\n"
     "Flags:\n"
@@ -183,6 +202,7 @@ static char Usage[] =
     "	-F	<cipher-suite> Cipher suite for TLS/DTLS. Default value is DEFAULT.\n"
     "	-o	<origin> - the ORIGIN STUN attribute value.\n"
     "	-a	<bytes-per-second> Bandwidth for the bandwidth request in ALLOCATE. The default value is zero.\n"
+    "	-A	<sha1|sha256|sha384|sha512> MESSAGE-INTEGRITY hash for outgoing requests (default: sha1).\n"
     "	-K, --listener-threads <N>	Number of receive (listener) threads. Default auto: 0 for -m < 4,\n"
     "				bumped to 1 when -m >= 4. 0 = legacy single-event-base (no worker thread).\n"
     "				Each listener owns its own libevent base; sessions are sharded round-robin.\n"
@@ -298,6 +318,14 @@ int main(int argc, char **argv) {
     case 'a':
       bps = (band_limit_t)strtoul(optarg, NULL, 10);
       break;
+    case 'A': {
+      SHATYPE parsed_shatype = parse_shatype(optarg);
+      if (parsed_shatype == SHATYPE_ERROR) {
+        fprintf(stderr, "Unknown -A hash type '%s' (use sha1, sha256, sha384, or sha512)\n", optarg);
+        exit(1);
+      }
+      shatype = parsed_shatype;
+    } break;
     case 'K': {
       const long n = strtol(optarg, NULL, 10);
       if (n < 0 || n > UCLIENT_MAX_LISTENER_THREADS) {
