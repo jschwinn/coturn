@@ -396,6 +396,24 @@ static char *get_real_username(char *usname) {
   return turn_strdup(usname);
 }
 
+static bool rest_auth_shatype_from_integrity_attr_len(int len, SHATYPE *shatype) {
+  if (!shatype) {
+    return false;
+  }
+
+  switch (len) {
+  case SHA1SIZEBYTES:
+    *shatype = SHATYPE_SHA1;
+    return true;
+  case SHA256SIZEBYTES:
+    *shatype = SHATYPE_SHA256;
+    return true;
+  default:
+    *shatype = SHATYPE_ERROR;
+    return false;
+  };
+}
+
 /*
  * Password retrieval
  */
@@ -485,6 +503,8 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
             return -1;
           }
 
+          /* Keep OAuth validation unchanged here: this dual-mode change is for
+             shared-secret REST auth only. */
           switch (dot.enc_block.key_length) {
           case SHA1SIZEBYTES:
             break;
@@ -556,6 +576,7 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
       uint8_t hmac[MAXSHASIZE];
       unsigned int hmac_len;
       password_t pwdtmp;
+      SHATYPE shatype = SHATYPE_ERROR;
 
       hmac[0] = 0;
 
@@ -566,18 +587,12 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
         return -1;
       }
 
-      const int sarlen = stun_attr_get_len(sar);
-      switch (sarlen) {
-      case SHA1SIZEBYTES:
-        hmac_len = SHA1SIZEBYTES;
-        break;
-      case SHA256SIZEBYTES:
-      case SHA384SIZEBYTES:
-      case SHA512SIZEBYTES:
-      default:
+      if (!rest_auth_shatype_from_integrity_attr_len(stun_attr_get_len(sar), &shatype)) {
         clean_secrets_list(&sl);
         return -1;
-      };
+      }
+
+      hmac_len = (shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES : SHA1SIZEBYTES;
 
       for (sll = 0; sll < get_secrets_list_size(&sl); ++sll) {
 
@@ -585,7 +600,7 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
 
         if (secret) {
           if (stun_calculate_hmac(usname, strlen((char *)usname), (const uint8_t *)secret, strlen(secret), hmac,
-                                  &hmac_len, SHATYPE_DEFAULT)) {
+                                  &hmac_len, shatype)) {
             size_t pwd_length = 0;
             char *pwd = base64_encode(hmac, hmac_len, &pwd_length);
 
@@ -593,10 +608,10 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
               if (pwd_length < 1) {
                 free(pwd);
               } else {
-                if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key, SHATYPE_DEFAULT)) {
+                if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key, shatype)) {
                   if (stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, ioa_network_buffer_data(nbh),
-                                                              ioa_network_buffer_get_size(nbh), key, pwdtmp,
-                                                              SHATYPE_DEFAULT) > 0) {
+                                                              ioa_network_buffer_get_size(nbh), key, pwdtmp, shatype) >
+                      0) {
 
                     ret = 0;
                   }
