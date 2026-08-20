@@ -102,6 +102,9 @@ struct _ts_ur_super_session {
   hmackey_t hmackey;
   int hmackey_set;
   password_t pwd;
+  /* MESSAGE-INTEGRITY hash negotiated from the client's request, so that
+   * responses are signed with the same hash the client will verify. */
+  SHATYPE shatype;
   int quota_used;
   int oauth;
   turn_time_t max_session_time_auth;
