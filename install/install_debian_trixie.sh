@@ -35,7 +35,6 @@ install_binaries() {
 
   for binary in \
     turnserver \
-    turnadmin \
     turnutils_uclient \
     turnutils_peer \
     turnutils_stunclient \
@@ -47,6 +46,8 @@ install_binaries() {
       install -m 0755 "${SRC_DIR}/bin/${binary}" "${BIN_DIR}/${binary}"
     fi
   done
+
+  ln -sf "${BIN_DIR}/turnserver" "${BIN_DIR}/turnadmin"
 
   if [[ -f "${SRC_DIR}/turnserver.conf" ]]; then
     install -m 0644 "${SRC_DIR}/turnserver.conf" "${CFG_DEST}"
