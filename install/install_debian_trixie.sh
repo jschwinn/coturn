@@ -50,7 +50,8 @@ install_binaries() {
   ln -sf "${BIN_DIR}/turnserver" "${BIN_DIR}/turnadmin"
 
   if [[ -f "${SRC_DIR}/turnserver.conf" ]]; then
-    install -m 0644 "${SRC_DIR}/turnserver.conf" "${CFG_DEST}"
+    install -d -o turnserver -g turnserver "$(dirname "${CFG_DEST}")"
+    install -o turnserver -g turnserver -m 0640 "${SRC_DIR}/turnserver.conf" "${CFG_DEST}"
   fi
 }
 
@@ -102,10 +103,6 @@ install_systemd_service() {
     return 0
   fi
 
-  if ! id -u turnserver >/dev/null 2>&1; then
-    useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin turnserver
-  fi
-
   install -d -o turnserver -g turnserver /var/lib/turn /var/log/turnserver
 
   cat > /etc/systemd/system/coturn.service <<'EOF'
@@ -139,13 +136,20 @@ Alias=turnserver.service
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now coturn.service
-  echo "coturn systemd service installed and started"
+  systemctl enable coturn.service
+  echo "coturn systemd service installed"
+}
+
+create_turnserver_user() {
+  if ! id -u turnserver >/dev/null 2>&1; then
+    useradd --system --home-dir /nonexistent --shell /usr/sbin/nologin turnserver
+  fi
 }
 
 main() {
   require_root
   ensure_debian_packages
+  create_turnserver_user
   install_binaries
   initialize_sqlite_db
   apply_kernel_tuning
