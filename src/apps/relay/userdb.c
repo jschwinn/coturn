@@ -582,17 +582,23 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
 
       /* Determine the REST HMAC algorithm.
        * - With PA negotiation (PA attr present): use the chosen password algorithm.
-       *   RFC 8489 requires SHA256 MESSAGE-INTEGRITY even for PA=MD5, so mi_shatype
-       *   is always SHA256 once PA negotiation is active; using it would produce
-       *   the wrong REST HMAC for SHA1-keyed shared secrets.
-       * - Without PA negotiation (legacy path, e.g. UDP listener fast-path 401):
-       *   fall back to mi_shatype directly, matching what the client used to
-       *   compute g_upwd (controlled by -A sha256 on the client). */
+       *   RFC 8489 requires SHA-256 MESSAGE-INTEGRITY even for PA=MD5, so mi_shatype
+       *   is always SHA-256 once PA negotiation is active; using it here would
+       *   produce the wrong REST HMAC for SHA-1-keyed shared secrets.
+       * - Without PA negotiation: try SHA-1 first (RFC 5766 REST API default) then
+       *   SHA-256. SHA-1 covers standard WebRTC clients regardless of whether they
+       *   send MESSAGE-INTEGRITY or MESSAGE-INTEGRITY-SHA256. SHA-256 covers
+       *   turnutils_uclient -A sha256 and any other client that generates REST
+       *   credentials with SHA-256 HMAC. */
       const bool pa_negotiated = (pa_attr != NULL);
       const SHATYPE rest_hmac_shatype = pa_negotiated
           ? ((password_algorithm == STUN_PASSWORD_ALGORITHM_SHA256) ? SHATYPE_SHA256 : SHATYPE_SHA1)
-          : shatype;
-      hmac_len = (rest_hmac_shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES : SHA1SIZEBYTES;
+          : SHATYPE_SHA1;
+
+      /* In the non-PA case a second pass with SHA-256 is tried below if SHA-1 fails. */
+      for (int sha_pass = 0; sha_pass <= (pa_negotiated ? 0 : 1) && ret != 0; sha_pass++) {
+        const SHATYPE cur_rest_shatype = (sha_pass == 0) ? rest_hmac_shatype : SHATYPE_SHA256;
+        hmac_len = (cur_rest_shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES : SHA1SIZEBYTES;
 
       for (sll = 0; sll < get_secrets_list_size(&sl); ++sll) {
 
@@ -600,7 +606,7 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
 
         if (secret) {
           if (stun_calculate_hmac(usname, strlen((char *)usname), (const uint8_t *)secret, strlen(secret), hmac,
-                                  &hmac_len, rest_hmac_shatype)) {
+                                  &hmac_len, cur_rest_shatype)) {
             size_t pwd_length = 0;
             char *pwd = base64_encode(hmac, hmac_len, &pwd_length);
 
@@ -627,7 +633,9 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
           }
         }
       }
-    }
+      } /* sha_pass loop */
+
+    } /* if (!turn_time_before) */
 
     clean_secrets_list(&sl);
 
