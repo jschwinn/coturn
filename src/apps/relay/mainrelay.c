@@ -204,6 +204,8 @@ turn_params_t turn_params = {
     0,                                  /* server_relay */
     0,                                  /* fingerprint */
     ':',                                /* rest_api_separator */
+    {SHATYPE_SHA1, SHATYPE_SHA256},      /* rest_api_sha_algorithms */
+    2,                                  /* rest_api_sha_algorithms_count */
     STUN_DEFAULT_NONCE_EXPIRATION_TIME, /* stale_nonce */
     STUN_DEFAULT_MAX_ALLOCATE_LIFETIME, /* max_allocate_lifetime */
     STUN_DEFAULT_CHANNEL_LIFETIME,      /* channel_lifetime */
@@ -1588,6 +1590,7 @@ enum EXTRA_OPTS {
   PROMETHEUS_CERT_OPT,
   PROMETHEUS_KEY_OPT,
   AUTH_SECRET_OPT,
+  REST_API_SHA_ALGORITHMS_OPT,
   NO_AUTH_PINGS_OPT,
   NO_DYNAMIC_IP_LIST_OPT,
   NO_DYNAMIC_REALMS_OPT,
@@ -1786,6 +1789,7 @@ static const struct myoption long_options[] = {
     {"tcp-alternate-server", required_argument, NULL, TCP_ALTERNATE_SERVER_OPT},
     {"udp-alternate-server", required_argument, NULL, UDP_ALTERNATE_SERVER_OPT},
     {"rest-api-separator", required_argument, NULL, 'C'},
+    {"rest-api-sha-algorithms", required_argument, NULL, REST_API_SHA_ALGORITHMS_OPT},
     {"max-allocate-timeout", required_argument, NULL, MAX_ALLOCATE_TIMEOUT_OPT},
     {"drain-min-allocations", required_argument, NULL, DRAIN_MIN_ALLOCATIONS_OPT},
     {"no-multicast-peers", optional_argument, NULL, NO_MULTICAST_PEERS_OPT},
@@ -2682,6 +2686,19 @@ static void set_option(int c, char *value) {
       turn_params.rest_api_separator = *value;
     }
     break;
+  case REST_API_SHA_ALGORITHMS_OPT: {
+    SHATYPE algorithms[4] = {SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR};
+    size_t count = 0;
+    if (!value || !turn_parse_shatype_list(value, algorithms, 4, &count)) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR,
+                    "CONFIG: invalid --rest-api-sha-algorithms value '%s'. Valid values: sha1, sha256, sha384, sha512.\n",
+                    (value ? value : ""));
+      exit(-1);
+    }
+    memcpy(turn_params.rest_api_sha_algorithms, algorithms, sizeof(algorithms[0]) * count);
+    turn_params.rest_api_sha_algorithms_count = count;
+    break;
+  }
   case LOG_BINDING_OPT:
     turn_params.log_binding = get_bool_value(value);
     break;

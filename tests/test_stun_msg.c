@@ -948,6 +948,23 @@ static void test_binding_response_address_attrs_by_compat_mode(void) {
   }
 }
 
+static void test_rest_api_shatype_list_parses_case_insensitive_values(void) {
+  SHATYPE algorithms[4] = {SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR};
+  size_t count = 0;
+
+  TEST_ASSERT_TRUE(turn_parse_shatype_list("sha1, SHA256", algorithms, 4, &count));
+  TEST_ASSERT_EQUAL_size_t(2, count);
+  TEST_ASSERT_EQUAL_INT(SHATYPE_SHA1, algorithms[0]);
+  TEST_ASSERT_EQUAL_INT(SHATYPE_SHA256, algorithms[1]);
+}
+
+static void test_rest_api_shatype_list_rejects_unknown_value(void) {
+  SHATYPE algorithms[4] = {SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR};
+  size_t count = 0;
+
+  TEST_ASSERT_FALSE(turn_parse_shatype_list("sha1,sha999", algorithms, 4, &count));
+}
+
 int main(void) {
   UNITY_BEGIN();
   RUN_TEST(test_init_request_produces_valid_stun_header);
@@ -991,5 +1008,7 @@ int main(void) {
   RUN_TEST(test_channel_bind_request_keeps_explicit_valid_channel);
   RUN_TEST(test_legacy_rfc5766_channel_frame_still_recognized);
   RUN_TEST(test_binding_response_address_attrs_by_compat_mode);
+  RUN_TEST(test_rest_api_shatype_list_parses_case_insensitive_values);
+  RUN_TEST(test_rest_api_shatype_list_rejects_unknown_value);
   return UNITY_END();
 }

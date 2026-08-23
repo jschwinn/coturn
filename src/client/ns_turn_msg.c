@@ -47,6 +47,7 @@
 #include <stdio.h> // for fprintf, printf, stderr, snprintf
 #include <stdlib.h>
 #include <string.h> // for memcpy, strlen, memset, strncpy, strcmp
+#include <strings.h>
 
 ///////////
 
@@ -168,6 +169,72 @@ static void turn_random_tid_size(void *id) {
     }
   }
 #endif
+}
+
+bool turn_parse_shatype_list(const char *value, SHATYPE *algorithms, size_t max_count, size_t *count) {
+  if (!value || !algorithms || !count || (max_count == 0)) {
+    return false;
+  }
+
+  *count = 0;
+  char work[256] = {0};
+  const size_t value_len = strlen(value);
+
+  if (value_len == 0 || (value_len >= sizeof(work))) {
+    return false;
+  }
+
+  memcpy(work, value, value_len + 1);
+
+  char *cursor = work;
+  while (*cursor) {
+    while ((*cursor == ' ') || (*cursor == '\t')) {
+      ++cursor;
+    }
+
+    if (!*cursor) {
+      break;
+    }
+
+    char *comma = strchr(cursor, ',');
+    if (comma) {
+      *comma = 0;
+    }
+
+    char *end = cursor + strlen(cursor);
+    while ((end > cursor) && ((end[-1] == ' ') || (end[-1] == '\t'))) {
+      *--end = 0;
+    }
+
+    if (*cursor) {
+      SHATYPE parsed = SHATYPE_ERROR;
+      if (!strcasecmp(cursor, "sha1") || !strcasecmp(cursor, "sha-1")) {
+        parsed = SHATYPE_SHA1;
+      } else if (!strcasecmp(cursor, "sha256") || !strcasecmp(cursor, "sha-256")) {
+        parsed = SHATYPE_SHA256;
+      } else if (!strcasecmp(cursor, "sha384") || !strcasecmp(cursor, "sha-384")) {
+        parsed = SHATYPE_SHA384;
+      } else if (!strcasecmp(cursor, "sha512") || !strcasecmp(cursor, "sha-512")) {
+        parsed = SHATYPE_SHA512;
+      }
+
+      if (parsed == SHATYPE_ERROR) {
+        return false;
+      }
+      if (*count >= max_count) {
+        return false;
+      }
+      algorithms[*count] = parsed;
+      ++(*count);
+    }
+
+    if (!comma) {
+      break;
+    }
+    cursor = comma + 1;
+  }
+
+  return (*count > 0);
 }
 
 bool stun_calculate_hmac(const uint8_t *buf, size_t len, const uint8_t *key, size_t keylen, uint8_t *hmac,

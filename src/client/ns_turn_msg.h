@@ -271,7 +271,7 @@ bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, 
                                     stun_password_algorithm_t password_algorithm);
 bool stun_calculate_hmac(const uint8_t *buf, size_t len, const uint8_t *key, size_t sz, uint8_t *hmac,
                          unsigned int *hmac_len, SHATYPE shatype);
-
+bool turn_parse_shatype_list(const char *value, SHATYPE *algorithms, size_t max_count, size_t *count);
 /* Stateless NONCE (see docs/stateless-nonce.md): the nonce a server hands out
  * in a 401/438 challenge is an authenticated timestamp cookie,
  *
