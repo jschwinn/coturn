@@ -78,6 +78,23 @@ initialize_sqlite_db() {
   fi
 }
 
+apply_kernel_tuning() {
+  local sysctl_conf="/etc/sysctl.d/99-coturn-performance.conf"
+
+  cat > "${sysctl_conf}" <<'EOF'
+# coturn performance baseline for high-concurrency deployments.
+net.core.rmem_max = 524288
+net.core.wmem_max = 524288
+net.core.rmem_default = 262144
+net.core.wmem_default = 262144
+net.core.netdev_max_backlog = 250000
+EOF
+
+  if command -v sysctl >/dev/null 2>&1; then
+    sysctl -p "${sysctl_conf}" >/dev/null
+  fi
+}
+
 install_systemd_service() {
   if ! command -v systemctl >/dev/null 2>&1; then
     echo "systemctl not found; skipping systemd setup"
@@ -111,7 +128,9 @@ NoNewPrivileges=yes
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 PrivateTmp=yes
-LimitNOFILE=65536
+LimitNOFILE=262144
+LimitNPROC=65536
+TasksMax=infinity
 
 [Install]
 WantedBy=multi-user.target
@@ -128,6 +147,7 @@ main() {
   ensure_debian_packages
   install_binaries
   initialize_sqlite_db
+  apply_kernel_tuning
   install_systemd_service
 
   echo "coturn runtime installed to ${BIN_DIR}"
