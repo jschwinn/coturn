@@ -3533,12 +3533,6 @@ static void generate_random_challenge_nonce(uint8_t *nonce) {
   }
 }
 
-static void get_supported_password_algorithms(stun_password_algorithms_attr_t *algorithms) {
-  stun_init_password_algorithms_attr(algorithms);
-  stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_MD5);
-  stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_SHA256);
-}
-
 static int create_challenge_response(ts_ur_super_session *ss, stun_tid *tid, int *resp_constructed, int *err_code,
                                      const uint8_t **reason, ioa_network_buffer_handle nbh, uint16_t method) {
   size_t len = ioa_network_buffer_get_size(nbh);
@@ -3549,25 +3543,8 @@ static int create_challenge_response(ts_ur_super_session *ss, stun_tid *tid, int
   /* strlen, not NONCE_MAX_SIZE - 1: the random nonce (TURN_RANDOM_NONCE_LENGTH
    * chars) and the stateless timestamp||MAC nonce
    * (TURN_STATELESS_NONCE_LENGTH) differ in length. */
-  char full_nonce[STUN_NONCE_COOKIE_LENGTH + NONCE_MAX_SIZE] = "";
-  stun_password_algorithms_attr_t password_algorithms;
-  get_supported_password_algorithms(&password_algorithms);
-  if ((srv && (srv->ct == TURN_CREDENTIALS_LONG_TERM) && !srv->oauth) && password_algorithms.count) {
-    char nonce_cookie[STUN_NONCE_COOKIE_LENGTH + 1] = "";
-    const uint32_t security_features = (1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT);
-    if (stun_nonce_cookie_build(security_features, nonce_cookie)) {
-      snprintf(full_nonce, sizeof(full_nonce), "%s%s", nonce_cookie, (const char *)ss->nonce);
-      stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, (const uint8_t *)full_nonce,
-                        (int)strlen(full_nonce));
-      stun_attr_add_password_algorithms_str(ioa_network_buffer_data(nbh), &len, &password_algorithms);
-    } else {
-      stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
-                        (int)strlen((char *)ss->nonce));
-    }
-  } else {
-    stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
-                      (int)strlen((char *)ss->nonce));
-  }
+  stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
+                    (int)strlen((char *)ss->nonce));
   char *realm = ss->realm_options.name;
   stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_REALM, (uint8_t *)realm,
                     (int)(strlen((char *)(realm))));
@@ -3825,25 +3802,11 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       stun_attr_ref pa_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
                                                               ioa_network_buffer_get_size(in_buffer->nbh),
                                                               STUN_ATTRIBUTE_PASSWORD_ALGORITHM);
-      stun_password_algorithms_attr_t supported_password_algorithms;
-      get_supported_password_algorithms(&supported_password_algorithms);
-      if (!pa_list_attr || !stun_attr_get_password_algorithms(pa_list_attr, &password_algorithms) ||
-          !stun_password_algorithms_equal(&password_algorithms, &supported_password_algorithms)) {
-        *err_code = 401;
-        *reason = (const uint8_t *)"Wrong PASSWORD-ALGORITHMS";
-        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
+      if (pa_list_attr && stun_attr_get_password_algorithms(pa_list_attr, &password_algorithms)) {
+        password_algorithms_present = true;
       }
-      password_algorithms_present = true;
-      if (!pa_attr || !stun_attr_get_password_algorithm(pa_attr, &password_algorithm) ||
-          !stun_password_algorithms_contains(&password_algorithms, password_algorithm)) {
-        *err_code = 401;
-        *reason = (const uint8_t *)"Wrong PASSWORD-ALGORITHM";
-        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
-      }
-      if (mi_shatype != SHATYPE_SHA256) {
-        *err_code = 401;
-        *reason = (const uint8_t *)"MESSAGE-INTEGRITY-SHA256 required";
-        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
+      if (pa_attr) {
+        stun_attr_get_password_algorithm(pa_attr, &password_algorithm);
       }
     }
 
