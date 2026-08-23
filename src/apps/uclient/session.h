@@ -77,6 +77,8 @@ typedef struct {
   bool broken;
   uint8_t nonce[STUN_MAX_NONCE_SIZE + 1];
   uint8_t realm[STUN_MAX_REALM_SIZE + 1];
+  stun_challenge_options_t challenge_options;
+  stun_password_algorithm_t password_algorithm;
   /* oAuth */
   bool oauth;
   uint8_t server_name[STUN_MAX_SERVER_NAME_SIZE + 1];

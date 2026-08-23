@@ -181,6 +181,7 @@ turn_credential_type get_turn_credentials_type(void);
 
 int add_integrity(app_ur_conn_info *clnet_info, stun_buffer *message);
 int check_integrity(app_ur_conn_info *clnet_info, stun_buffer *message);
+void apply_challenge_options(app_ur_conn_info *clnet_info, const stun_challenge_options_t *options);
 
 SOCKET_TYPE get_socket_type(void);
 

@@ -92,9 +92,10 @@ int not_rare_event(void) {
 static int get_allocate_address_family(ioa_addr *relay_addr) {
   if (relay_addr->ss.sa_family == AF_INET) {
     return STUN_ATTRIBUTE_REQUESTED_ADDRESS_FAMILY_VALUE_DEFAULT;
-  } else if (relay_addr->ss.sa_family == AF_INET6) {
-    return STUN_ATTRIBUTE_REQUESTED_ADDRESS_FAMILY_VALUE_IPV6;
   } else {
+    if (relay_addr->ss.sa_family == AF_INET6) {
+      return STUN_ATTRIBUTE_REQUESTED_ADDRESS_FAMILY_VALUE_IPV6;
+    }
     return STUN_ATTRIBUTE_REQUESTED_ADDRESS_FAMILY_VALUE_INVALID;
   }
 }
@@ -103,7 +104,6 @@ static int get_allocate_address_family(ioa_addr *relay_addr) {
 
 static SSL *tls_connect(ioa_socket_raw fd, ioa_addr *remote_addr, const char *remote_host, bool *try_again,
                         int connect_cycle) {
-
   const int ctxtype = (int)(((unsigned long)turn_random_number()) % root_tls_ctx_num);
 
   SSL *const ssl = SSL_new(root_tls_ctx[ctxtype]);
@@ -129,9 +129,7 @@ static SSL *tls_connect(ioa_socket_raw fd, ioa_addr *remote_addr, const char *re
     fprintf(stderr, "ERROR: DTLS is not supported.\n");
     exit(-1);
 #else
-    /* Create BIO, connect and set to already connected */
     BIO *bio = BIO_new_dgram(fd, BIO_CLOSE);
-    // bio = BIO_new_socket(fd, BIO_CLOSE);
 
     BIO_ctrl(bio, BIO_CTRL_DGRAM_SET_CONNECTED, 0, &remote_addr->ss);
 
@@ -139,7 +137,6 @@ static SSL *tls_connect(ioa_socket_raw fd, ioa_addr *remote_addr, const char *re
 
     {
       struct timeval timeout;
-      /* Set and activate timeouts */
       timeout.tv_sec = DTLS_MAX_CONNECT_TIMEOUT;
       timeout.tv_usec = 0;
       BIO_ctrl(bio, BIO_CTRL_DGRAM_SET_RECV_TIMEOUT, 0, &timeout);
@@ -205,9 +202,9 @@ static SSL *tls_connect(ioa_socket_raw fd, ioa_addr *remote_addr, const char *re
 
   if (clnet_verbose && SSL_get_peer_certificate(ssl)) {
     if (use_tcp) {
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "------TLS---------------------------------------------------\n");
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "------TLS--------------------------------------------------\n");
     } else {
-      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "------DTLS---------------------------------------------------\n");
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "------DTLS-------------------------------------------------\n");
     }
     X509_NAME_print_ex_fp(stdout, X509_get_subject_name(SSL_get_peer_certificate(ssl)), 1, XN_FLAG_MULTILINE);
     TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "\n\n Cipher: %s\n", SSL_CIPHER_get_name(SSL_get_current_cipher(ssl)));
@@ -592,46 +589,51 @@ beg_allocate:
 
             read_mobility_ticket(clnet_info, response_message);
 
-          } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
+          } else {
+            stun_challenge_options_t challenge_options;
+            if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
                                                     sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                                    clnet_info->server_name, &(clnet_info->oauth))) {
-            goto beg_allocate;
-          } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+                                                    clnet_info->server_name, &(clnet_info->oauth),
+                                                    &challenge_options)) {
+              apply_challenge_options(clnet_info, &challenge_options);
+              goto beg_allocate;
+            } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
 
-            allocate_received = true;
+              allocate_received = true;
 
-            if (err_code == 300) {
+              if (err_code == 300) {
 
-              if (clnet_info->nonce[0]) {
-                if (check_integrity(clnet_info, response_message) < 0) {
-                  ret = -1;
-                  goto done;
+                if (clnet_info->nonce[0]) {
+                  if (check_integrity(clnet_info, response_message) < 0) {
+                    ret = -1;
+                    goto done;
+                  }
+                }
+
+                ioa_addr alternate_server;
+                if (!stun_attr_get_first_addr(response_message, STUN_ATTRIBUTE_ALTERNATE_SERVER, &alternate_server,
+                                              NULL)) {
+                  // error
+                } else if (turn_addr && turn_port) {
+                  addr_to_string_no_port(&alternate_server, turn_addr);
+                  *turn_port = addr_get_port(&alternate_server);
                 }
               }
 
-              ioa_addr alternate_server;
-              if (!stun_attr_get_first_addr(response_message, STUN_ATTRIBUTE_ALTERNATE_SERVER, &alternate_server,
-                                            NULL)) {
-                // error
-              } else if (turn_addr && turn_port) {
-                addr_to_string_no_port(&alternate_server, turn_addr);
-                *turn_port = addr_get_port(&alternate_server);
+              TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "error %d (%s)\n", err_code, (char *)err_msg);
+              if (err_code != 437) {
+                current_reservation_token = 0;
+                ret = -1;
+                goto done;
+              } else {
+                TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "trying allocate again %d...\n", err_code);
+                sleep(1);
+                reopen_socket = true;
               }
-            }
-
-            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "error %d (%s)\n", err_code, (char *)err_msg);
-            if (err_code != 437) {
-              current_reservation_token = 0;
-              ret = -1;
-              goto done;
             } else {
-              TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "trying allocate again %d...\n", err_code);
-              sleep(1);
-              reopen_socket = true;
+              TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown allocate response\n");
+              /* Try again ? */
             }
-          } else {
-            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown allocate response\n");
-            /* Try again ? */
           }
         } else {
           TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "recv: %s\n", strerror(errno));
@@ -792,18 +794,23 @@ beg_allocate:
             if (verbose) {
               TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "success\n");
             }
-          } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
-                                                    sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                                    clnet_info->server_name, &(clnet_info->oauth))) {
-            goto beg_refresh;
-          } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
-            refresh_received = true;
-            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "error %d (%s)\n", err_code, (char *)err_msg);
-            ret = -1;
-            goto done;
           } else {
-            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown refresh response\n");
-            /* Try again ? */
+            stun_challenge_options_t challenge_options;
+            if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
+                                                    sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
+                                                    clnet_info->server_name, &(clnet_info->oauth),
+                                                    &challenge_options)) {
+              apply_challenge_options(clnet_info, &challenge_options);
+              goto beg_refresh;
+            } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+              refresh_received = true;
+              TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "error %d (%s)\n", err_code, (char *)err_msg);
+              ret = -1;
+              goto done;
+            } else {
+              TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown refresh response\n");
+              /* Try again ? */
+            }
           }
         } else {
           TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "recv: %s\n", strerror(errno));
@@ -892,17 +899,21 @@ beg_bind:
           if (verbose) {
             TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "success: 0x%x\n", (int)(*chn));
           }
-        } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
-                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                                  clnet_info->server_name, &(clnet_info->oauth))) {
-          goto beg_bind;
-        } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "channel bind: error %d (%s)\n", err_code, (char *)err_msg);
-          ret = -1;
-          goto done;
         } else {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown channel bind response\n");
-          /* Try again ? */
+          stun_challenge_options_t challenge_options;
+          if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
+                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
+                                                  clnet_info->server_name, &(clnet_info->oauth), &challenge_options)) {
+            apply_challenge_options(clnet_info, &challenge_options);
+            goto beg_bind;
+          } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "channel bind: error %d (%s)\n", err_code, (char *)err_msg);
+            ret = -1;
+            goto done;
+          } else {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown channel bind response\n");
+            /* Try again ? */
+          }
         }
       } else {
         TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "recv: %s\n", strerror(errno));
@@ -999,17 +1010,21 @@ beg_cp:
           if (verbose) {
             TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "success\n");
           }
-        } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
-                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                                  clnet_info->server_name, &(clnet_info->oauth))) {
-          goto beg_cp;
-        } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "create permission error %d (%s)\n", err_code, (char *)err_msg);
-          ret = -1;
-          goto done;
         } else {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown create permission response\n");
-          /* Try again ? */
+          stun_challenge_options_t challenge_options;
+          if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
+                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
+                                                  clnet_info->server_name, &(clnet_info->oauth), &challenge_options)) {
+            apply_challenge_options(clnet_info, &challenge_options);
+            goto beg_cp;
+          } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "create permission error %d (%s)\n", err_code, (char *)err_msg);
+            ret = -1;
+            goto done;
+          } else {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown create permission response\n");
+            /* Try again ? */
+          }
         }
       } else {
         TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR, "recv: %s\n", strerror(errno));
@@ -1073,16 +1088,20 @@ beg_refresh:
         TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "refresh success: lifetime=%u\n", lifetime);
       }
       goto done;
-    } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
+    } else {
+      stun_challenge_options_t challenge_options;
+      if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
                                               sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                              clnet_info->server_name, &(clnet_info->oauth))) {
-      goto beg_refresh;
-    } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
-      if (verbose) {
-        TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "refresh error %d (%s)\n", err_code, (char *)err_msg);
+                                              clnet_info->server_name, &(clnet_info->oauth), &challenge_options)) {
+        apply_challenge_options(clnet_info, &challenge_options);
+        goto beg_refresh;
+      } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+        if (verbose) {
+          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "refresh error %d (%s)\n", err_code, (char *)err_msg);
+        }
+        ret = -1;
+        goto done;
       }
-      ret = -1;
-      goto done;
     }
   }
 
@@ -1734,18 +1753,22 @@ beg_cb:
             TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "success\n");
           }
           atc->tcp_data_bound = true;
-        } else if (stun_is_challenge_response_str(response_message->buf, response_message->len, &err_code, err_msg,
-                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                                  clnet_info->server_name, &(clnet_info->oauth))) {
-          goto beg_cb;
-        } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
-          cb_received = true;
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "connection bind error %d (%s)\n", err_code, (char *)err_msg);
-          ret = -1;
-          goto done;
         } else {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown connection bind response\n");
-          /* Try again ? */
+          stun_challenge_options_t challenge_options;
+          if (stun_is_challenge_response_full_str(response_message->buf, response_message->len, &err_code, err_msg,
+                                                  sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
+                                                  clnet_info->server_name, &(clnet_info->oauth), &challenge_options)) {
+            apply_challenge_options(clnet_info, &challenge_options);
+            goto beg_cb;
+          } else if (stun_is_error_response(response_message, &err_code, err_msg, sizeof(err_msg))) {
+            cb_received = true;
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "connection bind error %d (%s)\n", err_code, (char *)err_msg);
+            ret = -1;
+            goto done;
+          } else {
+            TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "unknown connection bind response\n");
+            /* Try again ? */
+          }
         }
       } else {
         if (errorOK) {

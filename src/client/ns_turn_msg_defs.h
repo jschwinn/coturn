@@ -106,9 +106,14 @@
 #define STUN_ATTRIBUTE_REALM (0x0014)
 #define STUN_ATTRIBUTE_NONCE (0x0015)
 #define STUN_ATTRIBUTE_REQUESTED_ADDRESS_FAMILY (0x0017)
+#define STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256 (0x001C)
+#define STUN_ATTRIBUTE_PASSWORD_ALGORITHM (0x001D)
+#define STUN_ATTRIBUTE_USERHASH (0x001E)
 #define STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS (0x0020)
 #define OLD_STUN_ATTRIBUTE_XOR_MAPPED_ADDRESS (0x8020)
 
+#define STUN_ATTRIBUTE_PASSWORD_ALGORITHMS (0x8002)
+#define STUN_ATTRIBUTE_ALTERNATE_DOMAIN (0x8003)
 #define STUN_ATTRIBUTE_SOFTWARE (0x8022)
 #define OLD_STUN_ATTRIBUTE_SERVER STUN_ATTRIBUTE_SOFTWARE
 #define STUN_ATTRIBUTE_ALTERNATE_SERVER (0x8023)
@@ -201,6 +206,27 @@ typedef enum _SHATYPE SHATYPE;
 #define shatype_name(sht)                                                                                              \
   ((sht == SHATYPE_SHA1) ? "SHA1"                                                                                      \
                          : ((sht == SHATYPE_SHA256) ? "SHA256" : ((sht == SHATYPE_SHA384) ? "SHA384" : "SHA512")))
+
+enum _STUN_PASSWORD_ALGORITHM {
+  STUN_PASSWORD_ALGORITHM_ERROR = -1,
+  STUN_PASSWORD_ALGORITHM_RESERVED = 0,
+  STUN_PASSWORD_ALGORITHM_MD5 = 0x0001,
+  STUN_PASSWORD_ALGORITHM_SHA256 = 0x0002,
+};
+
+typedef enum _STUN_PASSWORD_ALGORITHM stun_password_algorithm_t;
+
+#define stun_password_algorithm_name(alg)                                                                              \
+  ((alg == STUN_PASSWORD_ALGORITHM_MD5) ? "MD5"                                                                       \
+                                        : ((alg == STUN_PASSWORD_ALGORITHM_SHA256) ? "SHA-256" : "UNKNOWN"))
+
+#define STUN_NONCE_COOKIE_PREFIX "obMatJos2"
+#define STUN_NONCE_COOKIE_PREFIX_LENGTH (9)
+#define STUN_NONCE_COOKIE_BASE64_LENGTH (4)
+#define STUN_NONCE_COOKIE_LENGTH (STUN_NONCE_COOKIE_PREFIX_LENGTH + STUN_NONCE_COOKIE_BASE64_LENGTH)
+
+#define STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT (0)
+#define STUN_SECURITY_FEATURE_USERNAME_ANONYMITY_BIT (1)
 
 /* <<== SHA */
 

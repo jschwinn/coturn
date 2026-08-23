@@ -1097,6 +1097,9 @@ static void turn_server_sweep_timed_events(turn_turnserver *server) {
   case STUN_ATTRIBUTE_PRIORITY:                                                                                        \
   case STUN_ATTRIBUTE_FINGERPRINT:                                                                                     \
   case STUN_ATTRIBUTE_MESSAGE_INTEGRITY:                                                                               \
+  case STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256:                                                                        \
+  case STUN_ATTRIBUTE_PASSWORD_ALGORITHM:                                                                              \
+  case STUN_ATTRIBUTE_PASSWORD_ALGORITHMS:                                                                             \
     break;                                                                                                             \
   case STUN_ATTRIBUTE_USERNAME:                                                                                        \
   case STUN_ATTRIBUTE_REALM:                                                                                           \
@@ -3530,6 +3533,12 @@ static void generate_random_challenge_nonce(uint8_t *nonce) {
   }
 }
 
+static void get_supported_password_algorithms(stun_password_algorithms_attr_t *algorithms) {
+  stun_init_password_algorithms_attr(algorithms);
+  stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_MD5);
+  stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_SHA256);
+}
+
 static int create_challenge_response(ts_ur_super_session *ss, stun_tid *tid, int *resp_constructed, int *err_code,
                                      const uint8_t **reason, ioa_network_buffer_handle nbh, uint16_t method) {
   size_t len = ioa_network_buffer_get_size(nbh);
@@ -3540,8 +3549,25 @@ static int create_challenge_response(ts_ur_super_session *ss, stun_tid *tid, int
   /* strlen, not NONCE_MAX_SIZE - 1: the random nonce (TURN_RANDOM_NONCE_LENGTH
    * chars) and the stateless timestamp||MAC nonce
    * (TURN_STATELESS_NONCE_LENGTH) differ in length. */
-  stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
-                    (int)strlen((char *)ss->nonce));
+  char full_nonce[STUN_NONCE_COOKIE_LENGTH + NONCE_MAX_SIZE] = "";
+  stun_password_algorithms_attr_t password_algorithms;
+  get_supported_password_algorithms(&password_algorithms);
+  if ((srv && (srv->ct == TURN_CREDENTIALS_LONG_TERM) && !srv->oauth) && password_algorithms.count) {
+    char nonce_cookie[STUN_NONCE_COOKIE_LENGTH + 1] = "";
+    const uint32_t security_features = (1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT);
+    if (stun_nonce_cookie_build(security_features, nonce_cookie)) {
+      snprintf(full_nonce, sizeof(full_nonce), "%s%s", nonce_cookie, (const char *)ss->nonce);
+      stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, (const uint8_t *)full_nonce,
+                        (int)strlen(full_nonce));
+      stun_attr_add_password_algorithms_str(ioa_network_buffer_data(nbh), &len, &password_algorithms);
+    } else {
+      stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
+                        (int)strlen((char *)ss->nonce));
+    }
+  } else {
+    stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_NONCE, ss->nonce,
+                      (int)strlen((char *)ss->nonce));
+  }
   char *realm = ss->realm_options.name;
   stun_attr_add_str(ioa_network_buffer_data(nbh), &len, STUN_ATTRIBUTE_REALM, (uint8_t *)realm,
                     (int)(strlen((char *)(realm))));
@@ -3601,9 +3627,17 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
                            int can_resume) {
   uint8_t usname[STUN_MAX_USERNAME_SIZE + 1];
   uint8_t nonce[STUN_MAX_NONCE_SIZE + 1];
+  uint8_t raw_nonce[NONCE_MAX_SIZE] = "";
   uint8_t realm[STUN_MAX_REALM_SIZE + 1];
   size_t alen = 0;
   SHATYPE mi_shatype = SHATYPE_DEFAULT;
+  stun_password_algorithm_t password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
+  stun_password_algorithms_attr_t password_algorithms;
+  bool password_algorithms_present = false;
+  bool nonce_cookie_present = false;
+  uint32_t nonce_security_features = 0;
+
+  stun_init_password_algorithms_attr(&password_algorithms);
 
   if (!need_stun_authentication(server, ss)) {
     return 0;
@@ -3645,34 +3679,15 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
 
   /* MESSAGE_INTEGRITY ATTR: */
 
-  stun_attr_ref sar =
-      stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
-                                      ioa_network_buffer_get_size(in_buffer->nbh), STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
+  stun_attr_ref sar = stun_get_message_integrity_attr_str(ioa_network_buffer_data(in_buffer->nbh),
+                                                          ioa_network_buffer_get_size(in_buffer->nbh), &mi_shatype);
 
   if (!sar) {
     *err_code = 401;
     return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
   }
 
-  {
-    const int sarlen = stun_attr_get_len(sar);
-
-    switch (sarlen) {
-    case SHA1SIZEBYTES:
-      mi_shatype = SHATYPE_SHA1;
-      break;
-    case SHA256SIZEBYTES:
-      mi_shatype = SHATYPE_SHA256;
-      break;
-    case SHA384SIZEBYTES:
-    case SHA512SIZEBYTES:
-    default:
-      *err_code = 401;
-      return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
-    };
-
-    ss->shatype = mi_shatype;
-  }
+  ss->shatype = mi_shatype;
 
   {
 
@@ -3787,6 +3802,51 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
     memcpy(nonce, stun_attr_get_value(sar), alen);
     nonce[alen] = 0;
 
+    const uint8_t *presented_nonce = nonce;
+    size_t presented_nonce_len = alen;
+    if (stun_nonce_cookie_parse(nonce, alen, &nonce_security_features, (const uint8_t **)&presented_nonce,
+                                &presented_nonce_len)) {
+      nonce_cookie_present = true;
+      if (presented_nonce_len >= sizeof(raw_nonce)) {
+        *err_code = 400;
+        *reason = (const uint8_t *)"Nonce is too long";
+        return -1;
+      }
+      memcpy(raw_nonce, presented_nonce, presented_nonce_len);
+      raw_nonce[presented_nonce_len] = 0;
+    } else {
+      memcpy(raw_nonce, nonce, alen + 1);
+    }
+
+    if (nonce_cookie_present && (nonce_security_features & (1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT))) {
+      stun_attr_ref pa_list_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
+                                                                   ioa_network_buffer_get_size(in_buffer->nbh),
+                                                                   STUN_ATTRIBUTE_PASSWORD_ALGORITHMS);
+      stun_attr_ref pa_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
+                                                              ioa_network_buffer_get_size(in_buffer->nbh),
+                                                              STUN_ATTRIBUTE_PASSWORD_ALGORITHM);
+      stun_password_algorithms_attr_t supported_password_algorithms;
+      get_supported_password_algorithms(&supported_password_algorithms);
+      if (!pa_list_attr || !stun_attr_get_password_algorithms(pa_list_attr, &password_algorithms) ||
+          !stun_password_algorithms_equal(&password_algorithms, &supported_password_algorithms)) {
+        *err_code = 401;
+        *reason = (const uint8_t *)"Wrong PASSWORD-ALGORITHMS";
+        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
+      }
+      password_algorithms_present = true;
+      if (!pa_attr || !stun_attr_get_password_algorithm(pa_attr, &password_algorithm) ||
+          !stun_password_algorithms_contains(&password_algorithms, password_algorithm)) {
+        *err_code = 401;
+        *reason = (const uint8_t *)"Wrong PASSWORD-ALGORITHM";
+        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
+      }
+      if (mi_shatype != SHATYPE_SHA256) {
+        *err_code = 401;
+        *reason = (const uint8_t *)"MESSAGE-INTEGRITY-SHA256 required";
+        return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
+      }
+    }
+
     /* Stale Nonce check: */
 
     if (new_nonce) {
@@ -3798,15 +3858,15 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
        * nonce lifetime. */
       bool accepted = false;
       if (turn_server_stateless_nonce_enabled(server)) {
-        if (!strcmp((char *)ss->nonce, (char *)nonce)) {
+        if (!strcmp((char *)ss->nonce, (char *)raw_nonce)) {
           accepted = true;
         } else {
           const ioa_addr *raddr = get_remote_addr_from_ioa_socket(ss->client_socket);
           uint32_t issued_at = 0;
           if (raddr && turn_check_stateless_nonce(server->stateless_nonce_key, server->stateless_nonce_key_size, raddr,
                                                   (uint32_t)server->ctime, turn_server_stateless_nonce_lifetime(server),
-                                                  (const char *)nonce, &issued_at)) {
-            STRCPY(ss->nonce, nonce);
+                                                  (const char *)raw_nonce, &issued_at)) {
+            STRCPY(ss->nonce, raw_nonce);
             if (*(server->stale_nonce)) {
               /* Expire relative to the nonce's real issue time, matching what
                * the issuing challenge promised. */
@@ -3823,12 +3883,16 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       }
     }
 
-    if (strcmp((char *)ss->nonce, (char *)nonce)) {
+    if (strcmp((char *)ss->nonce, (char *)raw_nonce)) {
       *err_code = 438;
       *reason = (const uint8_t *)"Stale nonce";
       return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
     }
   }
+
+  ss->password_algorithm = password_algorithm;
+  ss->nonce_cookie_present = nonce_cookie_present;
+  ss->nonce_security_features = nonce_security_features;
 
   /* Password */
   if (!(ss->hmackey_set) && (ss->pwd[0] == 0)) {

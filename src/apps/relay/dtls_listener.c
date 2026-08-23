@@ -771,16 +771,12 @@ static bool udp_stateless_nonce_fast_path(dtls_listener_relay_server_type *serve
   }
 
   /* MESSAGE-INTEGRITY is acted upon further down, after the method-specific
-   * branches. check_stun_auth() accepts a SHA1- or SHA256-length attribute and
-   * answers any other length with the same 401 challenge as a missing
-   * attribute, so mirror that set here. */
-  stun_attr_ref mi_attr = stun_attr_get_first_by_type_str(data, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
-  if (mi_attr) {
-    const int mi_len = stun_attr_get_len(mi_attr);
-    if ((mi_len != SHA1SIZEBYTES) && (mi_len != SHA256SIZEBYTES)) {
-      mi_attr = NULL;
-    }
-  }
+   * branches. Mirror check_stun_auth()'s RFC 8489-aware integrity-attribute
+   * detection here so the fast path and the session path route the same
+   * messages. */
+  SHATYPE mi_shatype = SHATYPE_DEFAULT;
+  stun_attr_ref mi_attr = stun_get_message_integrity_attr_str(data, len, &mi_shatype);
+  UNUSED_ARG(mi_shatype);
 
   const uint16_t method = stun_get_method_str(data, len);
 

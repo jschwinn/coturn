@@ -654,11 +654,6 @@ static void test_http_message_len_handles_non_null_terminated_buffer(void) {
  * to reject them -- these pin that boundary.
  */
 
-/* RFC 8489 MESSAGE-INTEGRITY-SHA256. Not implemented yet, so it has no name in
- * ns_turn_msg_defs.h; declared here to pin the behaviour a conformant client
- * that sends it will meet. */
-#define TEST_ATTR_MESSAGE_INTEGRITY_SHA256 (0x001C)
-
 static const uint8_t TEST_UNAME[] = "pavel";
 static const uint8_t TEST_REALM[] = "north.gov";
 static const uint8_t TEST_UPWD[] = "secret";
@@ -670,7 +665,14 @@ static const uint8_t TEST_LIFETIME_1[4] = {0, 0, 0, 1};
 
 static void test_integrity_key(hmackey_t key) {
   memset(key, 0, sizeof(hmackey_t));
-  TEST_ASSERT_TRUE(stun_produce_integrity_key_str(TEST_UNAME, TEST_REALM, TEST_UPWD, key, SHATYPE_DEFAULT));
+  TEST_ASSERT_TRUE(
+      stun_produce_integrity_key_str(TEST_UNAME, TEST_REALM, TEST_UPWD, key, STUN_PASSWORD_ALGORITHM_MD5));
+}
+
+static void test_integrity_key_sha256(hmackey_t key) {
+  memset(key, 0, sizeof(hmackey_t));
+  TEST_ASSERT_TRUE(
+      stun_produce_integrity_key_str(TEST_UNAME, TEST_REALM, TEST_UPWD, key, STUN_PASSWORD_ALGORITHM_SHA256));
 }
 
 /* An ALLOCATE requesting a 600 s lifetime, sealed with MESSAGE-INTEGRITY. */
@@ -684,6 +686,18 @@ static void build_authenticated_allocate(uint8_t *buf, size_t *len) {
   TEST_ASSERT_TRUE(stun_attr_add_str(buf, len, STUN_ATTRIBUTE_LIFETIME, TEST_LIFETIME_600, 4));
   TEST_ASSERT_TRUE(
       stun_attr_add_integrity_by_key_str(buf, len, TEST_UNAME, TEST_REALM, key, TEST_NONCE, SHATYPE_DEFAULT));
+}
+
+static void build_authenticated_allocate_sha256(uint8_t *buf, size_t *len) {
+  hmackey_t key;
+  test_integrity_key_sha256(key);
+
+  *len = 0;
+  stun_init_request_str(STUN_METHOD_ALLOCATE, buf, len);
+  TEST_ASSERT_TRUE(stun_attr_add_str(buf, len, STUN_ATTRIBUTE_REQUESTED_TRANSPORT, TEST_TRANSPORT_UDP, 4));
+  TEST_ASSERT_TRUE(stun_attr_add_str(buf, len, STUN_ATTRIBUTE_LIFETIME, TEST_LIFETIME_600, 4));
+  TEST_ASSERT_TRUE(
+      stun_attr_add_integrity_by_key_str(buf, len, TEST_UNAME, TEST_REALM, key, TEST_NONCE, SHATYPE_SHA256));
 }
 
 static int count_attrs_of_type(const uint8_t *buf, size_t len, uint16_t type, bool covered_only) {
@@ -769,10 +783,65 @@ static void test_covered_walk_hides_message_integrity_sha256_from_420(void) {
      unknown attribute and the server answers 420 -- rejecting a conformant
      client. The covered walk never reaches it, which is what the RFC requires
      and what keeps such clients working. */
-  TEST_ASSERT_TRUE(stun_attr_add_str(buf, &len, TEST_ATTR_MESSAGE_INTEGRITY_SHA256, sha256_hmac, 32));
+  TEST_ASSERT_TRUE(stun_attr_add_str(buf, &len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256, sha256_hmac, 32));
 
-  TEST_ASSERT_EQUAL_INT(1, count_attrs_of_type(buf, len, TEST_ATTR_MESSAGE_INTEGRITY_SHA256, false));
-  TEST_ASSERT_EQUAL_INT(0, count_attrs_of_type(buf, len, TEST_ATTR_MESSAGE_INTEGRITY_SHA256, true));
+  TEST_ASSERT_EQUAL_INT(1, count_attrs_of_type(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256, false));
+  TEST_ASSERT_EQUAL_INT(1, count_attrs_of_type(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256, true));
+}
+
+static void test_sha256_integrity_uses_rfc8489_attribute(void) {
+  uint8_t buf[1024] = {0};
+  size_t len = 0;
+  hmackey_t key;
+
+  build_authenticated_allocate_sha256(buf, &len);
+  test_integrity_key_sha256(key);
+
+  TEST_ASSERT_NOT_NULL(stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256));
+  TEST_ASSERT_NULL(stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY));
+  TEST_ASSERT_EQUAL_INT(
+      1, stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, buf, len, key, NULL, SHATYPE_SHA256));
+}
+
+static void test_challenge_parses_nonce_cookie_and_password_algorithms(void) {
+  uint8_t buf[1024] = {0};
+  size_t len = 0;
+  stun_tid tid = {0};
+  uint8_t realm[] = "example.org";
+  uint8_t nonce[] = "0123456789abcdef";
+  uint8_t parsed_realm[STUN_MAX_REALM_SIZE + 1] = {0};
+  uint8_t parsed_nonce[STUN_MAX_NONCE_SIZE + 1] = {0};
+  uint8_t server_name[STUN_MAX_SERVER_NAME_SIZE + 1] = {0};
+  uint8_t expected_nonce[STUN_MAX_NONCE_SIZE + 1] = {0};
+  char nonce_cookie[STUN_NONCE_COOKIE_LENGTH + 1] = {0};
+  stun_challenge_options_t options;
+  stun_password_algorithms_attr_t algorithms;
+  int err_code = 0;
+  uint8_t err_msg[128] = {0};
+  bool oauth = false;
+
+  TEST_ASSERT_TRUE(
+      stun_nonce_cookie_build(1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT, nonce_cookie));
+  snprintf((char *)expected_nonce, sizeof(expected_nonce), "%s%s", nonce_cookie, (const char *)nonce);
+
+  stun_init_error_response_str(STUN_METHOD_ALLOCATE, buf, &len, 401, (const uint8_t *)"Unauthorized", &tid, true);
+  TEST_ASSERT_TRUE(stun_attr_add_str(buf, &len, STUN_ATTRIBUTE_NONCE, expected_nonce, (int)strlen((char *)expected_nonce)));
+  TEST_ASSERT_TRUE(stun_attr_add_str(buf, &len, STUN_ATTRIBUTE_REALM, realm, (int)strlen((char *)realm)));
+
+  stun_init_password_algorithms_attr(&algorithms);
+  TEST_ASSERT_TRUE(stun_password_algorithms_add(&algorithms, STUN_PASSWORD_ALGORITHM_MD5));
+  TEST_ASSERT_TRUE(stun_attr_add_password_algorithms_str(buf, &len, &algorithms));
+
+  TEST_ASSERT_TRUE(stun_is_challenge_response_full_str(buf, len, &err_code, err_msg, sizeof(err_msg), parsed_realm,
+                                                       parsed_nonce, server_name, &oauth, &options));
+  TEST_ASSERT_EQUAL_INT(401, err_code);
+  TEST_ASSERT_EQUAL_STRING((char *)realm, (char *)parsed_realm);
+  TEST_ASSERT_EQUAL_STRING((char *)expected_nonce, (char *)parsed_nonce);
+  TEST_ASSERT_FALSE(oauth);
+  TEST_ASSERT_TRUE(options.nonce_cookie_present);
+  TEST_ASSERT_EQUAL_UINT32(1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT, options.nonce_security_features);
+  TEST_ASSERT_TRUE(options.password_algorithms_present);
+  TEST_ASSERT_TRUE(stun_password_algorithms_contains(&(options.password_algorithms), STUN_PASSWORD_ALGORITHM_MD5));
 }
 
 /* RFC 8656 par. 12: ChannelBind may only establish channels 0x4000-0x4FFF;
@@ -915,6 +984,8 @@ int main(void) {
   RUN_TEST(test_covered_walk_yields_message_integrity_itself);
   RUN_TEST(test_covered_walk_is_full_walk_without_message_integrity);
   RUN_TEST(test_covered_walk_hides_message_integrity_sha256_from_420);
+  RUN_TEST(test_sha256_integrity_uses_rfc8489_attribute);
+  RUN_TEST(test_challenge_parses_nonce_cookie_and_password_algorithms);
   RUN_TEST(test_channel_bind_macro_is_strict_rfc8656_range);
   RUN_TEST(test_channel_bind_request_stays_in_rfc8656_range);
   RUN_TEST(test_channel_bind_request_keeps_explicit_valid_channel);

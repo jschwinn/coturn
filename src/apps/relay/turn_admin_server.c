@@ -3648,7 +3648,7 @@ static void handle_https(ioa_socket_handle s, ioa_network_buffer_handle nbh) {
                     STRCPY(u, add_user);
                     STRCPY(r, add_realm);
                     STRCPY(p, pwd);
-                    stun_produce_integrity_key_str(u, r, p, key, SHATYPE_DEFAULT);
+                    stun_produce_integrity_key_str(u, r, p, key, STUN_PASSWORD_ALGORITHM_MD5);
                     size_t i = 0;
                     const size_t sz = get_hmackey_size(SHATYPE_DEFAULT);
                     int maxsz = (int)(sz * 2) + 1;

@@ -337,11 +337,17 @@ bool turn_check_stateless_nonce(const uint8_t *key, size_t key_size, const ioa_a
 }
 
 bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, const uint8_t *upwd, hmackey_t key,
-                                    SHATYPE shatype) {
+                                    stun_password_algorithm_t password_algorithm) {
   bool ret;
 
   ERR_clear_error();
-  UNUSED_ARG(shatype);
+
+  /* Zero-initialize key so that unused bytes beyond the digest output are
+   * deterministically 0.  This matters when the key is used with a wider
+   * HMAC (e.g. MD5 key = 16 bytes used as 32-byte HMAC-SHA256 key):
+   * without the memset the padding bytes are uninitialised and differ
+   * between client and server, causing HMAC mismatches. */
+  memset(key, 0, sizeof(hmackey_t));
 
   const size_t ulen = strlen((const char *)uname);
   const size_t rlen = strlen((const char *)realm);
@@ -357,7 +363,7 @@ bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, 
   strncpy((char *)str + ulen + 1 + rlen + 1, (const char *)upwd, sz - ulen - 1 - rlen - 1);
   str[strl] = 0;
 
-  if (shatype == SHATYPE_SHA256) {
+  if (password_algorithm == STUN_PASSWORD_ALGORITHM_SHA256) {
 #if !defined(OPENSSL_NO_SHA256) && defined(SHA256_DIGEST_LENGTH)
     unsigned int keylen = 0;
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -370,33 +376,7 @@ bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, 
     fprintf(stderr, "SHA256 is not supported\n");
     ret = false;
 #endif
-  } else if (shatype == SHATYPE_SHA384) {
-#if !defined(OPENSSL_NO_SHA384) && defined(SHA384_DIGEST_LENGTH)
-    unsigned int keylen = 0;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit(ctx, EVP_sha384());
-    EVP_DigestUpdate(ctx, str, strl);
-    EVP_DigestFinal(ctx, key, &keylen);
-    EVP_MD_CTX_free(ctx);
-    ret = true;
-#else
-    fprintf(stderr, "SHA384 is not supported\n");
-    ret = false;
-#endif
-  } else if (shatype == SHATYPE_SHA512) {
-#if !defined(OPENSSL_NO_SHA512) && defined(SHA512_DIGEST_LENGTH)
-    unsigned int keylen = 0;
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_DigestInit(ctx, EVP_sha512());
-    EVP_DigestUpdate(ctx, str, strl);
-    EVP_DigestFinal(ctx, key, &keylen);
-    EVP_MD_CTX_free(ctx);
-    ret = true;
-#else
-    fprintf(stderr, "SHA512 is not supported\n");
-    ret = false;
-#endif
-  } else {
+  } else if (password_algorithm == STUN_PASSWORD_ALGORITHM_MD5) {
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
     unsigned int keylen = 0;
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -421,6 +401,8 @@ bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, 
     EVP_MD_CTX_free(ctx);
 #endif // OPENSSL_VERSION_NUMBER >= 0X30000000L
     ret = true;
+  } else {
+    ret = false;
   }
 
   free(str);
@@ -684,10 +666,143 @@ bool stun_is_error_response_str(const uint8_t *buf, size_t len, int *err_code, u
   return false;
 }
 
-bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
-                                    size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
-                                    bool *oauth) {
+void stun_init_password_algorithms_attr(stun_password_algorithms_attr_t *algorithms) {
+  if (algorithms) {
+    memset(algorithms, 0, sizeof(*algorithms));
+  }
+}
+
+bool stun_password_algorithms_add(stun_password_algorithms_attr_t *algorithms, stun_password_algorithm_t algorithm) {
+  if (!algorithms || (algorithms->count >= STUN_MAX_PASSWORD_ALGORITHM_COUNT)) {
+    return false;
+  }
+
+  algorithms->algorithms[algorithms->count++] = algorithm;
+  return true;
+}
+
+bool stun_password_algorithms_contains(const stun_password_algorithms_attr_t *algorithms,
+                                       stun_password_algorithm_t algorithm) {
+  if (!algorithms) {
+    return false;
+  }
+
+  for (size_t i = 0; i < algorithms->count; ++i) {
+    if (algorithms->algorithms[i] == algorithm) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool stun_password_algorithms_equal(const stun_password_algorithms_attr_t *left,
+                                    const stun_password_algorithms_attr_t *right) {
+  if (!left || !right || (left->count != right->count)) {
+    return false;
+  }
+
+  for (size_t i = 0; i < left->count; ++i) {
+    if (left->algorithms[i] != right->algorithms[i]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void stun_init_challenge_options(stun_challenge_options_t *options) {
+  if (options) {
+    memset(options, 0, sizeof(*options));
+  }
+}
+
+static const char stun_nonce_cookie_b64_table[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+bool stun_nonce_cookie_build(uint32_t security_features, char cookie[STUN_NONCE_COOKIE_LENGTH + 1]) {
+  if (!cookie || (security_features > 0x00FFFFFFu)) {
+    return false;
+  }
+
+  memcpy(cookie, STUN_NONCE_COOKIE_PREFIX, STUN_NONCE_COOKIE_PREFIX_LENGTH);
+
+  const uint8_t bytes[3] = {(uint8_t)(security_features >> 16), (uint8_t)(security_features >> 8),
+                            (uint8_t)security_features};
+  cookie[9] = stun_nonce_cookie_b64_table[(bytes[0] >> 2) & 0x3F];
+  cookie[10] = stun_nonce_cookie_b64_table[((bytes[0] & 0x03) << 4) | ((bytes[1] >> 4) & 0x0F)];
+  cookie[11] = stun_nonce_cookie_b64_table[((bytes[1] & 0x0F) << 2) | ((bytes[2] >> 6) & 0x03)];
+  cookie[12] = stun_nonce_cookie_b64_table[bytes[2] & 0x3F];
+  cookie[13] = 0;
+
+  return true;
+}
+
+static int stun_nonce_cookie_b64_value(char c) {
+  if (c >= 'A' && c <= 'Z') {
+    return c - 'A';
+  }
+  if (c >= 'a' && c <= 'z') {
+    return c - 'a' + 26;
+  }
+  if (c >= '0' && c <= '9') {
+    return c - '0' + 52;
+  }
+  if (c == '+') {
+    return 62;
+  }
+  if (c == '/') {
+    return 63;
+  }
+  return -1;
+}
+
+bool stun_nonce_cookie_parse(const uint8_t *nonce, size_t nonce_len, uint32_t *security_features,
+                             const uint8_t **nonce_body, size_t *nonce_body_len) {
+  if (security_features) {
+    *security_features = 0;
+  }
+  if (nonce_body) {
+    *nonce_body = nonce;
+  }
+  if (nonce_body_len) {
+    *nonce_body_len = nonce_len;
+  }
+
+  if (!nonce || (nonce_len < STUN_NONCE_COOKIE_LENGTH) ||
+      memcmp(nonce, STUN_NONCE_COOKIE_PREFIX, STUN_NONCE_COOKIE_PREFIX_LENGTH) != 0) {
+    return false;
+  }
+
+  int v0 = stun_nonce_cookie_b64_value((char)nonce[9]);
+  int v1 = stun_nonce_cookie_b64_value((char)nonce[10]);
+  int v2 = stun_nonce_cookie_b64_value((char)nonce[11]);
+  int v3 = stun_nonce_cookie_b64_value((char)nonce[12]);
+  if ((v0 < 0) || (v1 < 0) || (v2 < 0) || (v3 < 0)) {
+    return false;
+  }
+
+  if (security_features) {
+    *security_features = (uint32_t)((v0 << 18) | (v1 << 12) | (v2 << 6) | v3);
+  }
+  if (nonce_body) {
+    *nonce_body = nonce + STUN_NONCE_COOKIE_LENGTH;
+  }
+  if (nonce_body_len) {
+    *nonce_body_len = nonce_len - STUN_NONCE_COOKIE_LENGTH;
+  }
+
+  return true;
+}
+
+bool stun_is_challenge_response_full_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
+                                         size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
+                                         bool *oauth, stun_challenge_options_t *options) {
   const bool ret = stun_is_error_response_str(buf, len, err_code, err_msg, err_msg_size);
+
+  if (options) {
+    stun_init_challenge_options(options);
+  }
 
   if (ret && (((*err_code) == 401) || ((*err_code) == 438))) {
     stun_attr_ref sar = stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_REALM);
@@ -732,6 +847,19 @@ bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_cod
             }
             memcpy(nonce, value, vlen);
             nonce[vlen] = 0;
+            if (options) {
+              uint32_t security_features = 0;
+              options->nonce_cookie_present =
+                  stun_nonce_cookie_parse(value, vlen, &security_features, NULL, NULL);
+              options->nonce_security_features = security_features;
+
+              stun_attr_ref pa_attr =
+                  stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHMS);
+              if (pa_attr) {
+                options->password_algorithms_present =
+                    stun_attr_get_password_algorithms(pa_attr, &(options->password_algorithms));
+              }
+            }
             if (oauth) {
               *oauth = found_oauth;
             }
@@ -743,6 +871,13 @@ bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_cod
   }
 
   return false;
+}
+
+bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
+                                    size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
+                                    bool *oauth) {
+  return stun_is_challenge_response_full_str(buf, len, err_code, err_msg, err_msg_size, realm, nonce, server_name,
+                                             oauth, NULL);
 }
 
 bool stun_is_response_str(const uint8_t *buf, size_t len) {
@@ -1548,6 +1683,67 @@ band_limit_t stun_attr_get_bandwidth(stun_attr_ref attr) {
   return 0;
 }
 
+bool stun_attr_get_password_algorithm(stun_attr_ref attr, stun_password_algorithm_t *algorithm) {
+  if (!attr || !algorithm || (stun_attr_get_type(attr) != STUN_ATTRIBUTE_PASSWORD_ALGORITHM) ||
+      (stun_attr_get_len(attr) < 4)) {
+    return false;
+  }
+
+  const uint8_t *value = stun_attr_get_value(attr);
+  if (!value) {
+    return false;
+  }
+
+  if (turn_read_u16(value + 2) != 0) {
+    return false;
+  }
+
+  *algorithm = (stun_password_algorithm_t)turn_read_u16(value);
+  return (*algorithm == STUN_PASSWORD_ALGORITHM_MD5) || (*algorithm == STUN_PASSWORD_ALGORITHM_SHA256);
+}
+
+bool stun_attr_get_password_algorithms(stun_attr_ref attr, stun_password_algorithms_attr_t *algorithms) {
+  if (!attr || !algorithms || (stun_attr_get_type(attr) != STUN_ATTRIBUTE_PASSWORD_ALGORITHMS)) {
+    return false;
+  }
+
+  stun_init_password_algorithms_attr(algorithms);
+
+  const int attr_len = stun_attr_get_len(attr);
+  if ((attr_len < 4) || ((attr_len & 0x3) != 0)) {
+    return false;
+  }
+
+  const uint8_t *value = stun_attr_get_value(attr);
+  if (!value) {
+    return false;
+  }
+
+  for (int offset = 0; offset < attr_len;) {
+    const stun_password_algorithm_t algorithm = (stun_password_algorithm_t)turn_read_u16(value + offset);
+    const uint16_t params_len = turn_read_u16(value + offset + 2);
+    offset += 4;
+
+    int padded_params_len = params_len;
+    if (padded_params_len & 0x3) {
+      padded_params_len += 4 - (padded_params_len & 0x3);
+    }
+    if ((offset + padded_params_len) > attr_len) {
+      return false;
+    }
+
+    if ((algorithm == STUN_PASSWORD_ALGORITHM_MD5) || (algorithm == STUN_PASSWORD_ALGORITHM_SHA256)) {
+      if (!stun_password_algorithms_add(algorithms, algorithm)) {
+        return false;
+      }
+    }
+
+    offset += padded_params_len;
+  }
+
+  return algorithms->count > 0;
+}
+
 uint64_t stun_attr_get_reservation_token_value(stun_attr_ref attr) {
   if (attr) {
     const uint8_t *value = stun_attr_get_value(attr);
@@ -1594,10 +1790,23 @@ uint8_t stun_attr_get_even_port(stun_attr_ref attr) {
 }
 
 stun_attr_ref stun_attr_get_next_covered_str(const uint8_t *buf, size_t len, stun_attr_ref prev) {
-  /* Everything past MESSAGE-INTEGRITY falls outside the HMAC, so stop here. */
-  if (prev && stun_attr_get_type(prev) == STUN_ATTRIBUTE_MESSAGE_INTEGRITY) {
+  if (!prev) {
+    return stun_attr_get_next_str(buf, len, prev);
+  }
+
+  const int prev_type = stun_attr_get_type(prev);
+  if (prev_type == STUN_ATTRIBUTE_MESSAGE_INTEGRITY) {
+    stun_attr_ref next = stun_attr_get_next_str(buf, len, prev);
+    if (next && (stun_attr_get_type(next) == STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256)) {
+      return next;
+    }
     return NULL;
   }
+
+  if (prev_type == STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256) {
+    return NULL;
+  }
+
   return stun_attr_get_next_str(buf, len, prev);
 }
 
@@ -1700,6 +1909,31 @@ bool stun_attr_add_str(uint8_t *buf, size_t *len, uint16_t attr, const uint8_t *
   memset(attr_start + 4 + alen, 0, paddinglen);
 
   return true;
+}
+
+bool stun_attr_add_password_algorithm_str(uint8_t *buf, size_t *len, stun_password_algorithm_t algorithm) {
+  uint8_t value[4] = {0};
+  turn_write_u16(value, (uint16_t)algorithm);
+  turn_write_u16(value + 2, 0);
+  return stun_attr_add_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHM, value, sizeof(value));
+}
+
+bool stun_attr_add_password_algorithms_str(uint8_t *buf, size_t *len,
+                                           const stun_password_algorithms_attr_t *algorithms) {
+  if (!algorithms || !algorithms->count) {
+    return false;
+  }
+
+  const size_t raw_len = algorithms->count * 4;
+  uint8_t *value = (uint8_t *)turn_calloc(raw_len ? raw_len : 1, sizeof(uint8_t));
+  for (size_t i = 0; i < algorithms->count; ++i) {
+    turn_write_u16(value + (i * 4), (uint16_t)algorithms->algorithms[i]);
+    turn_write_u16(value + (i * 4) + 2, 0);
+  }
+
+  const bool ok = stun_attr_add_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHMS, value, (int)raw_len);
+  free(value);
+  return ok;
 }
 
 bool stun_attr_add_addr_str(uint8_t *buf, size_t *len, uint16_t attr_type, const ioa_addr *ca) {
@@ -1968,27 +2202,49 @@ void print_bin_func(const char *name, size_t len, const void *s, const char *fun
   printf("]\n");
 }
 
+stun_attr_ref stun_get_message_integrity_attr_str(const uint8_t *buf, size_t len, SHATYPE *shatype) {
+  stun_attr_ref sar = stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256);
+  if (sar) {
+    const int attr_len = stun_attr_get_len(sar);
+    if ((attr_len < 16) || (attr_len > SHA256SIZEBYTES) || ((attr_len & 0x3) != 0)) {
+      return NULL;
+    }
+    if (shatype) {
+      *shatype = SHATYPE_SHA256;
+    }
+    return sar;
+  }
+
+  sar = stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
+  if (sar) {
+    if (stun_attr_get_len(sar) != SHA1SIZEBYTES) {
+      return NULL;
+    }
+    if (shatype) {
+      *shatype = SHATYPE_SHA1;
+    }
+  }
+
+  return sar;
+}
+
 bool stun_attr_add_integrity_str(turn_credential_type ct, uint8_t *buf, size_t *len, hmackey_t key, password_t pwd,
                                  SHATYPE shatype) {
   uint8_t hmac[MAXSHASIZE] = {0};
 
   unsigned int shasize;
+  uint16_t attr_type = STUN_ATTRIBUTE_MESSAGE_INTEGRITY;
 
   switch (shatype) {
   case SHATYPE_SHA256:
     shasize = SHA256SIZEBYTES;
-    break;
-  case SHATYPE_SHA384:
-    shasize = SHA384SIZEBYTES;
-    break;
-  case SHATYPE_SHA512:
-    shasize = SHA512SIZEBYTES;
+    attr_type = STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256;
     break;
   default:
     shasize = SHA1SIZEBYTES;
   };
 
-  if (!stun_attr_add_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY, hmac, shasize)) {
+  if (!stun_attr_add_str(buf, len, attr_type, hmac, shasize)) {
     return false;
   }
 
@@ -2020,10 +2276,11 @@ bool stun_attr_add_integrity_by_key_str(uint8_t *buf, size_t *len, const uint8_t
 }
 
 bool stun_attr_add_integrity_by_user_str(uint8_t *buf, size_t *len, const uint8_t *uname, const uint8_t *realm,
-                                         const uint8_t *upwd, const uint8_t *nonce, SHATYPE shatype) {
+                                         const uint8_t *upwd, const uint8_t *nonce, SHATYPE shatype,
+                                         stun_password_algorithm_t password_algorithm) {
   hmackey_t key;
 
-  if (!stun_produce_integrity_key_str(uname, realm, upwd, key, shatype)) {
+  if (!stun_produce_integrity_key_str(uname, realm, upwd, key, password_algorithm)) {
     return false;
   }
 
@@ -2045,40 +2302,17 @@ bool stun_attr_add_integrity_by_user_short_term_str(uint8_t *buf, size_t *len, c
  */
 int stun_check_message_integrity_by_key_str(turn_credential_type ct, uint8_t *buf, size_t len, hmackey_t key,
                                             password_t pwd, SHATYPE shatype) {
-  stun_attr_ref sar = stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
+  SHATYPE attr_shatype = SHATYPE_DEFAULT;
+  stun_attr_ref sar = stun_get_message_integrity_attr_str(buf, len, &attr_shatype);
   if (!sar) {
     return -1;
   }
 
-  unsigned int shasize = 0;
-  switch (stun_attr_get_len(sar)) {
-  case SHA256SIZEBYTES:
-    shasize = SHA256SIZEBYTES;
-    if (shatype != SHATYPE_SHA256) {
-      return -1;
-    }
-    break;
-  case SHA384SIZEBYTES:
-    shasize = SHA384SIZEBYTES;
-    if (shatype != SHATYPE_SHA384) {
-      return -1;
-    }
-    break;
-  case SHA512SIZEBYTES:
-    shasize = SHA512SIZEBYTES;
-    if (shatype != SHATYPE_SHA512) {
-      return -1;
-    }
-    break;
-  case SHA1SIZEBYTES:
-    shasize = SHA1SIZEBYTES;
-    if (shatype != SHATYPE_SHA1) {
-      return -1;
-    }
-    break;
-  default:
+  if (attr_shatype != shatype) {
     return -1;
-  };
+  }
+
+  unsigned int shasize = (unsigned int)stun_attr_get_len(sar);
 
   const int orig_len = stun_get_command_message_len_str(buf, len);
   if (orig_len < 0) {
@@ -2135,14 +2369,15 @@ int stun_check_message_integrity_by_key_str(turn_credential_type ct, uint8_t *bu
  * Return -1 if failure, 0 if the integrity is not correct, 1 if OK
  */
 int stun_check_message_integrity_str(turn_credential_type ct, uint8_t *buf, size_t len, const uint8_t *uname,
-                                     const uint8_t *realm, const uint8_t *upwd, SHATYPE shatype) {
+                                     const uint8_t *realm, const uint8_t *upwd, SHATYPE shatype,
+                                     stun_password_algorithm_t password_algorithm) {
   hmackey_t key;
   password_t pwd;
 
   if (ct == TURN_CREDENTIALS_SHORT_TERM) {
     strncpy((char *)pwd, (const char *)upwd, sizeof(password_t) - 1);
     pwd[sizeof(password_t) - 1] = 0;
-  } else if (!stun_produce_integrity_key_str(uname, realm, upwd, key, shatype)) {
+  } else if (!stun_produce_integrity_key_str(uname, realm, upwd, key, password_algorithm)) {
     return -1;
   }
 
