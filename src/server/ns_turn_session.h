@@ -105,9 +105,6 @@ struct _ts_ur_super_session {
   /* MESSAGE-INTEGRITY hash negotiated from the client's request, so that
    * responses are signed with the same hash the client will verify. */
   SHATYPE shatype;
-  stun_password_algorithm_t password_algorithm;
-  bool nonce_cookie_present;
-  uint32_t nonce_security_features;
   int quota_used;
   int oauth;
   turn_time_t max_session_time_auth;

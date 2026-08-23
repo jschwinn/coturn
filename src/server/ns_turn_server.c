@@ -3608,13 +3608,6 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
   uint8_t realm[STUN_MAX_REALM_SIZE + 1];
   size_t alen = 0;
   SHATYPE mi_shatype = SHATYPE_DEFAULT;
-  stun_password_algorithm_t password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
-  stun_password_algorithms_attr_t password_algorithms;
-  bool password_algorithms_present = false;
-  bool nonce_cookie_present = false;
-  uint32_t nonce_security_features = 0;
-
-  stun_init_password_algorithms_attr(&password_algorithms);
 
   if (!need_stun_authentication(server, ss)) {
     return 0;
@@ -3781,9 +3774,7 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
 
     const uint8_t *presented_nonce = nonce;
     size_t presented_nonce_len = alen;
-    if (stun_nonce_cookie_parse(nonce, alen, &nonce_security_features, (const uint8_t **)&presented_nonce,
-                                &presented_nonce_len)) {
-      nonce_cookie_present = true;
+    if (stun_nonce_cookie_parse(nonce, alen, NULL, (const uint8_t **)&presented_nonce, &presented_nonce_len)) {
       if (presented_nonce_len >= sizeof(raw_nonce)) {
         *err_code = 400;
         *reason = (const uint8_t *)"Nonce is too long";
@@ -3793,21 +3784,6 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       raw_nonce[presented_nonce_len] = 0;
     } else {
       memcpy(raw_nonce, nonce, alen + 1);
-    }
-
-    if (nonce_cookie_present && (nonce_security_features & (1u << STUN_SECURITY_FEATURE_PASSWORD_ALGORITHMS_BIT))) {
-      stun_attr_ref pa_list_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
-                                                                   ioa_network_buffer_get_size(in_buffer->nbh),
-                                                                   STUN_ATTRIBUTE_PASSWORD_ALGORITHMS);
-      stun_attr_ref pa_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(in_buffer->nbh),
-                                                              ioa_network_buffer_get_size(in_buffer->nbh),
-                                                              STUN_ATTRIBUTE_PASSWORD_ALGORITHM);
-      if (pa_list_attr && stun_attr_get_password_algorithms(pa_list_attr, &password_algorithms)) {
-        password_algorithms_present = true;
-      }
-      if (pa_attr) {
-        stun_attr_get_password_algorithm(pa_attr, &password_algorithm);
-      }
     }
 
     /* Stale Nonce check: */
@@ -3852,10 +3828,6 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
     }
   }
-
-  ss->password_algorithm = password_algorithm;
-  ss->nonce_cookie_present = nonce_cookie_present;
-  ss->nonce_security_features = nonce_security_features;
 
   /* Password */
   if (!(ss->hmackey_set) && (ss->pwd[0] == 0)) {
