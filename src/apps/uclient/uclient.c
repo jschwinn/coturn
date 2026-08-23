@@ -3061,7 +3061,11 @@ void apply_challenge_options(app_ur_conn_info *clnet_info, const stun_challenge_
   clnet_info->challenge_options = *options;
 
   if (options->password_algorithms_present) {
-    if (stun_password_algorithms_contains(&(options->password_algorithms), STUN_PASSWORD_ALGORITHM_SHA256)) {
+    /* Choose the password algorithm that matches what the user configured.
+     * This matters for REST auth: the shared-secret HMAC must use the same
+     * hash as g_upwd was computed with (controlled by -A / shatype). */
+    if (shatype == SHATYPE_SHA256 &&
+        stun_password_algorithms_contains(&(options->password_algorithms), STUN_PASSWORD_ALGORITHM_SHA256)) {
       clnet_info->password_algorithm = STUN_PASSWORD_ALGORITHM_SHA256;
     } else if (stun_password_algorithms_contains(&(options->password_algorithms), STUN_PASSWORD_ALGORITHM_MD5)) {
       clnet_info->password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;

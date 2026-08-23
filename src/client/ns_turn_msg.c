@@ -342,6 +342,13 @@ bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, 
 
   ERR_clear_error();
 
+  /* Zero-initialize key so that unused bytes beyond the digest output are
+   * deterministically 0.  This matters when the key is used with a wider
+   * HMAC (e.g. MD5 key = 16 bytes used as 32-byte HMAC-SHA256 key):
+   * without the memset the padding bytes are uninitialised and differ
+   * between client and server, causing HMAC mismatches. */
+  memset(key, 0, sizeof(hmackey_t));
+
   const size_t ulen = strlen((const char *)uname);
   const size_t rlen = strlen((const char *)realm);
   const size_t plen = strlen((const char *)upwd);

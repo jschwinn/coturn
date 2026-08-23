@@ -1098,6 +1098,8 @@ static void turn_server_sweep_timed_events(turn_turnserver *server) {
   case STUN_ATTRIBUTE_FINGERPRINT:                                                                                     \
   case STUN_ATTRIBUTE_MESSAGE_INTEGRITY:                                                                               \
   case STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256:                                                                        \
+  case STUN_ATTRIBUTE_PASSWORD_ALGORITHM:                                                                              \
+  case STUN_ATTRIBUTE_PASSWORD_ALGORITHMS:                                                                             \
     break;                                                                                                             \
   case STUN_ATTRIBUTE_USERNAME:                                                                                        \
   case STUN_ATTRIBUTE_REALM:                                                                                           \
@@ -3534,6 +3536,7 @@ static void generate_random_challenge_nonce(uint8_t *nonce) {
 static void get_supported_password_algorithms(stun_password_algorithms_attr_t *algorithms) {
   stun_init_password_algorithms_attr(algorithms);
   stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_MD5);
+  stun_password_algorithms_add(algorithms, STUN_PASSWORD_ALGORITHM_SHA256);
 }
 
 static int create_challenge_response(ts_ur_super_session *ss, stun_tid *tid, int *resp_constructed, int *err_code,
