@@ -61,10 +61,10 @@ STUN specs:
   * [RFC 5389](https://datatracker.ietf.org/doc/html/rfc5389) - base "new" STUN specs (obsoleted by RFC 8489)
   * [RFC 8489](https://datatracker.ietf.org/doc/html/rfc8489) - STUN, obsoleting RFC 5389. Its message-processing
     rules are implemented: attributes following `MESSAGE-INTEGRITY` are ignored, repeated attributes are
-    first-wins, and `ERROR-CODE` reason phrases are declared without their padding. Its authentication additions
-    are **not** implemented - `MESSAGE-INTEGRITY-SHA256`, `PASSWORD-ALGORITHMS`, `PASSWORD-ALGORITHM`, `USERHASH`
-    and the nonce cookie are all absent, so an RFC 8489 client falls back to that spec's MD5 key derivation with
-    SHA-1 `MESSAGE-INTEGRITY`, which RFC 8489 permits.
+    first-wins, and `ERROR-CODE` reason phrases are declared without their padding. Its long-term authentication
+    additions are partially implemented: `MESSAGE-INTEGRITY-SHA256`, `PASSWORD-ALGORITHMS`, `PASSWORD-ALGORITHM`,
+    and the nonce cookie are supported for negotiated long-term authentication. `USERHASH` is still absent, and the
+    currently advertised password-derivation algorithm remains MD5 for compatibility with the existing user database.
   * [RFC 5769](https://datatracker.ietf.org/doc/html/rfc5769) - test vectors for STUN protocol testing
   * [RFC 5780](https://datatracker.ietf.org/doc/html/rfc5780) - NAT behavior discovery support
   * [RFC 7350](https://datatracker.ietf.org/doc/html/rfc7350) - DTLS as transport for STUN & TURN

@@ -671,7 +671,9 @@ public:
     uint8_t *srealm = (uint8_t *)strdup(realm.c_str());
     uint8_t *supwd = (uint8_t *)strdup(upwd.c_str());
     SHATYPE sht = SHATYPE_SHA1;
-    bool ret = (0 < stun_check_message_integrity_str(ct, _buffer, _sz, suname, srealm, supwd, sht));
+    bool ret =
+      (0 < stun_check_message_integrity_str(ct, _buffer, _sz, suname, srealm, supwd, sht,
+                          STUN_PASSWORD_ALGORITHM_MD5));
     free(suname);
     free(srealm);
     free(supwd);
@@ -692,7 +694,8 @@ public:
     uint8_t *supwd = (uint8_t *)strdup(upwd.c_str());
     uint8_t *snonce = (uint8_t *)strdup(nonce.c_str());
 
-    stun_attr_add_integrity_by_user_str(_buffer, &_sz, suname, srealm, supwd, snonce, SHATYPE_SHA1);
+    stun_attr_add_integrity_by_user_str(_buffer, &_sz, suname, srealm, supwd, snonce, SHATYPE_SHA1,
+                      STUN_PASSWORD_ALGORITHM_MD5);
 
     free(suname);
     free(srealm);

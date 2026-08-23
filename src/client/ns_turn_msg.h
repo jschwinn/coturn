@@ -73,6 +73,20 @@ typedef uint8_t hmackey_t[64];
 typedef uint8_t password_t[STUN_MAX_PWD_SIZE + 1];
 typedef unsigned long band_limit_t;
 
+#define STUN_MAX_PASSWORD_ALGORITHM_COUNT (4)
+
+typedef struct {
+  size_t count;
+  stun_password_algorithm_t algorithms[STUN_MAX_PASSWORD_ALGORITHM_COUNT];
+} stun_password_algorithms_attr_t;
+
+typedef struct {
+  bool nonce_cookie_present;
+  uint32_t nonce_security_features;
+  bool password_algorithms_present;
+  stun_password_algorithms_attr_t password_algorithms;
+} stun_challenge_options_t;
+
 ///////////////////////////////////
 
 typedef const void *stun_attr_ref;
@@ -125,6 +139,9 @@ bool stun_is_error_response_str(const uint8_t *buf, size_t len, int *err_code, u
 bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
                                     size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
                                     bool *oauth);
+bool stun_is_challenge_response_full_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
+                                         size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
+                                         bool *oauth, stun_challenge_options_t *options);
 bool stun_is_response_str(const uint8_t *buf, size_t len);
 bool stun_is_indication_str(const uint8_t *buf, size_t len);
 uint16_t stun_get_method_str(const uint8_t *buf, size_t len);
@@ -158,6 +175,7 @@ uint64_t stun_attr_get_reservation_token_value(stun_attr_ref attr);
 stun_attr_ref stun_attr_get_first_by_type_str(const uint8_t *buf, size_t len, uint16_t attr_type);
 stun_attr_ref stun_attr_get_first_str(const uint8_t *buf, size_t len);
 stun_attr_ref stun_attr_get_next_str(const uint8_t *buf, size_t len, stun_attr_ref prev);
+stun_attr_ref stun_get_message_integrity_attr_str(const uint8_t *buf, size_t len, SHATYPE *shatype);
 /**
  * Like stun_attr_get_next_str(), but stops once MESSAGE-INTEGRITY has been
  * yielded. Use this to walk the attributes a message is allowed to act on.
@@ -173,11 +191,13 @@ stun_attr_ref stun_attr_get_next_str(const uint8_t *buf, size_t len, stun_attr_r
  *
  * FINGERPRINT is exempt in the RFC but needs no special case here: it is an
  * unkeyed checksum validated separately over the whole message, and carries no
- * semantics a caller would act on. MESSAGE-INTEGRITY-SHA256 is not implemented
- * yet; when it is, this boundary moves to the end of that attribute.
+ * semantics a caller would act on.
  */
 stun_attr_ref stun_attr_get_next_covered_str(const uint8_t *buf, size_t len, stun_attr_ref prev);
 bool stun_attr_add_str(uint8_t *buf, size_t *len, uint16_t attr, const uint8_t *avalue, int alen);
+bool stun_attr_add_password_algorithm_str(uint8_t *buf, size_t *len, stun_password_algorithm_t algorithm);
+bool stun_attr_add_password_algorithms_str(uint8_t *buf, size_t *len,
+                                           const stun_password_algorithms_attr_t *algorithms);
 bool stun_attr_add_addr_str(uint8_t *buf, size_t *len, uint16_t attr_type, const ioa_addr *ca);
 bool stun_attr_get_addr_str(const uint8_t *buf, size_t len, stun_attr_ref attr, ioa_addr *ca,
                             const ioa_addr *default_addr);
@@ -187,6 +207,18 @@ bool stun_attr_add_channel_number_str(uint8_t *buf, size_t *len, uint16_t chnumb
 bool stun_attr_add_bandwidth_str(uint8_t *buf, size_t *len, band_limit_t bps);
 bool stun_attr_add_address_error_code(uint8_t *buf, size_t *len, int requested_address_family, int error_code);
 uint16_t stun_attr_get_first_channel_number_str(const uint8_t *buf, size_t len);
+bool stun_attr_get_password_algorithm(stun_attr_ref attr, stun_password_algorithm_t *algorithm);
+bool stun_attr_get_password_algorithms(stun_attr_ref attr, stun_password_algorithms_attr_t *algorithms);
+void stun_init_password_algorithms_attr(stun_password_algorithms_attr_t *algorithms);
+bool stun_password_algorithms_add(stun_password_algorithms_attr_t *algorithms, stun_password_algorithm_t algorithm);
+bool stun_password_algorithms_contains(const stun_password_algorithms_attr_t *algorithms,
+                                       stun_password_algorithm_t algorithm);
+bool stun_password_algorithms_equal(const stun_password_algorithms_attr_t *left,
+                                    const stun_password_algorithms_attr_t *right);
+void stun_init_challenge_options(stun_challenge_options_t *options);
+bool stun_nonce_cookie_build(uint32_t security_features, char cookie[STUN_NONCE_COOKIE_LENGTH + 1]);
+bool stun_nonce_cookie_parse(const uint8_t *nonce, size_t nonce_len, uint32_t *security_features,
+                             const uint8_t **nonce_body, size_t *nonce_body_len);
 
 bool stun_set_allocate_request_str(uint8_t *buf, size_t *len, uint32_t lifetime, bool af4, bool af6, uint8_t transport,
                                    bool mobile, const char *rt, int ep);
@@ -215,13 +247,15 @@ void print_bin_func(const char *name, size_t len, const void *s, const char *fun
 int stun_check_message_integrity_by_key_str(turn_credential_type ct, uint8_t *buf, size_t len, hmackey_t key,
                                             password_t pwd, SHATYPE shatype);
 int stun_check_message_integrity_str(turn_credential_type ct, uint8_t *buf, size_t len, const uint8_t *uname,
-                                     const uint8_t *realm, const uint8_t *upwd, SHATYPE shatype);
+                   const uint8_t *realm, const uint8_t *upwd, SHATYPE shatype,
+                   stun_password_algorithm_t password_algorithm);
 bool stun_attr_add_integrity_str(turn_credential_type ct, uint8_t *buf, size_t *len, hmackey_t key, password_t pwd,
                                  SHATYPE shatype);
 bool stun_attr_add_integrity_by_key_str(uint8_t *buf, size_t *len, const uint8_t *uname, const uint8_t *realm,
                                         hmackey_t key, const uint8_t *nonce, SHATYPE shatype);
 bool stun_attr_add_integrity_by_user_str(uint8_t *buf, size_t *len, const uint8_t *uname, const uint8_t *realm,
-                                         const uint8_t *upwd, const uint8_t *nonce, SHATYPE shatype);
+                     const uint8_t *upwd, const uint8_t *nonce, SHATYPE shatype,
+                     stun_password_algorithm_t password_algorithm);
 bool stun_attr_add_integrity_by_user_short_term_str(uint8_t *buf, size_t *len, const uint8_t *uname, password_t pwd,
                                                     SHATYPE shatype);
 size_t get_hmackey_size(SHATYPE shatype);
@@ -234,7 +268,7 @@ size_t get_hmackey_size(SHATYPE shatype);
 long turn_random_number(void);
 
 bool stun_produce_integrity_key_str(const uint8_t *uname, const uint8_t *realm, const uint8_t *upwd, hmackey_t key,
-                                    SHATYPE shatype);
+                                    stun_password_algorithm_t password_algorithm);
 bool stun_calculate_hmac(const uint8_t *buf, size_t len, const uint8_t *key, size_t sz, uint8_t *hmac,
                          unsigned int *hmac_len, SHATYPE shatype);
 

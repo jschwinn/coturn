@@ -396,24 +396,6 @@ static char *get_real_username(char *usname) {
   return turn_strdup(usname);
 }
 
-static bool rest_auth_shatype_from_integrity_attr_len(int len, SHATYPE *shatype) {
-  if (!shatype) {
-    return false;
-  }
-
-  switch (len) {
-  case SHA1SIZEBYTES:
-    *shatype = SHATYPE_SHA1;
-    return true;
-  case SHA256SIZEBYTES:
-    *shatype = SHATYPE_SHA256;
-    return true;
-  default:
-    *shatype = SHATYPE_ERROR;
-    return false;
-  };
-}
-
 /*
  * Password retrieval
  */
@@ -577,19 +559,25 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
       unsigned int hmac_len;
       password_t pwdtmp;
       SHATYPE shatype = SHATYPE_ERROR;
+      stun_password_algorithm_t password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
 
       hmac[0] = 0;
 
-      stun_attr_ref sar = stun_attr_get_first_by_type_str(
-          ioa_network_buffer_data(nbh), ioa_network_buffer_get_size(nbh), STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
+      stun_attr_ref sar = stun_get_message_integrity_attr_str(ioa_network_buffer_data(nbh),
+                                                              ioa_network_buffer_get_size(nbh), &shatype);
       if (!sar) {
         clean_secrets_list(&sl);
         return -1;
       }
 
-      if (!rest_auth_shatype_from_integrity_attr_len(stun_attr_get_len(sar), &shatype)) {
-        clean_secrets_list(&sl);
-        return -1;
+      stun_attr_ref pa_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(nbh),
+                                                              ioa_network_buffer_get_size(nbh),
+                                                              STUN_ATTRIBUTE_PASSWORD_ALGORITHM);
+      if (pa_attr) {
+        if (!stun_attr_get_password_algorithm(pa_attr, &password_algorithm)) {
+          clean_secrets_list(&sl);
+          return -1;
+        }
       }
 
       hmac_len = (shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES : SHA1SIZEBYTES;
@@ -608,7 +596,8 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
               if (pwd_length < 1) {
                 free(pwd);
               } else {
-                if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key, shatype)) {
+                if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key,
+                                                   password_algorithm)) {
                   if (stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, ioa_network_buffer_data(nbh),
                                                               ioa_network_buffer_get_size(nbh), key, pwdtmp, shatype) >
                       0) {
@@ -792,7 +781,7 @@ int add_static_user_account(char *user) {
   } else {
     // this is only for default realm
     stun_produce_integrity_key_str((uint8_t *)usname, (uint8_t *)get_realm(NULL)->options.name, (uint8_t *)s, *key,
-                                   SHATYPE_DEFAULT);
+                     STUN_PASSWORD_ALGORITHM_MD5);
   }
 
   // the ur_string_map functions only fail (well... other than allocation failures, which aren't handled)
@@ -993,7 +982,7 @@ int adminuser(uint8_t *user, uint8_t *realm, uint8_t *pwd, uint8_t *secret, uint
     must_set_admin_pwd(pwd);
 
     {
-      stun_produce_integrity_key_str(user, realm, pwd, key, SHATYPE_DEFAULT);
+      stun_produce_integrity_key_str(user, realm, pwd, key, STUN_PASSWORD_ALGORITHM_MD5);
       const size_t sz = get_hmackey_size(SHATYPE_DEFAULT);
       int maxsz = (int)(sz * 2) + 1;
       char *s = skey;
