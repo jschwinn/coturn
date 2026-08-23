@@ -2070,7 +2070,7 @@ static int handle_turn_refresh(turn_turnserver *server, ts_ur_super_session *ss,
                 if (message_integrity) {
                   size_t ilen = ioa_network_buffer_get_size(nbh);
                   stun_attr_add_integrity_str(server->ct, ioa_network_buffer_data(nbh), &ilen, ss->hmackey, ss->pwd,
-                                              SHATYPE_DEFAULT);
+                                              ss->shatype);
                   ioa_network_buffer_set_size(nbh, ilen);
                 }
 
@@ -2349,7 +2349,7 @@ static void tcp_peer_connection_completed_callback(int success, void *arg) {
 
     if (need_stun_authentication(server, ss)) {
       stun_attr_add_integrity_str(server->ct, ioa_network_buffer_data(nbh), &len, ss->hmackey, ss->pwd,
-                                  SHATYPE_DEFAULT);
+                                  ss->shatype);
       ioa_network_buffer_set_size(nbh, len);
     }
 
@@ -2824,7 +2824,7 @@ int turnserver_accept_tcp_client_data_connection(turn_turnserver *server, tcp_co
     if (message_integrity && ss) {
       size_t len = ioa_network_buffer_get_size(nbh);
       stun_attr_add_integrity_str(server->ct, ioa_network_buffer_data(nbh), &len, ss->hmackey, ss->pwd,
-                                  SHATYPE_DEFAULT);
+                                  ss->shatype);
       ioa_network_buffer_set_size(nbh, len);
     }
 
@@ -3603,6 +3603,7 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
   uint8_t nonce[STUN_MAX_NONCE_SIZE + 1];
   uint8_t realm[STUN_MAX_REALM_SIZE + 1];
   size_t alen = 0;
+  SHATYPE mi_shatype = SHATYPE_DEFAULT;
 
   if (!need_stun_authentication(server, ss)) {
     return 0;
@@ -3658,14 +3659,19 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
 
     switch (sarlen) {
     case SHA1SIZEBYTES:
+      mi_shatype = SHATYPE_SHA1;
       break;
     case SHA256SIZEBYTES:
+      mi_shatype = SHATYPE_SHA256;
+      break;
     case SHA384SIZEBYTES:
     case SHA512SIZEBYTES:
     default:
       *err_code = 401;
       return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
     };
+
+    ss->shatype = mi_shatype;
   }
 
   {
@@ -3843,7 +3849,7 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
   /* Check integrity */
   if (stun_check_message_integrity_by_key_str(server->ct, ioa_network_buffer_data(in_buffer->nbh),
                                               ioa_network_buffer_get_size(in_buffer->nbh), ss->hmackey, ss->pwd,
-                                              SHATYPE_DEFAULT) < 1) {
+                                              mi_shatype) < 1) {
 
     if (can_resume) {
       (server->userkeycb)(server->id, server->ct, server->oauth, &(ss->oauth), usname, realm,
@@ -4346,7 +4352,7 @@ static int handle_turn_command(turn_turnserver *server, ts_ur_super_session *ss,
     if (message_integrity) {
       size_t len = ioa_network_buffer_get_size(nbh);
       stun_attr_add_integrity_str(server->ct, ioa_network_buffer_data(nbh), &len, ss->hmackey, ss->pwd,
-                                  SHATYPE_DEFAULT);
+                                  ss->shatype);
       ioa_network_buffer_set_size(nbh, len);
     }
 

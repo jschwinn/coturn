@@ -285,7 +285,7 @@ int main(int argc, char **argv) {
       {"no-even-port", no_argument, NULL, UCLIENT_OPT_NO_EVEN_PORT},
       {NULL, 0, NULL, 0}};
 
-  while ((c = getopt_long(argc, argv, "a:d:p:l:n:L:m:e:r:u:w:i:k:z:W:C:E:F:o:Y:K:bZvsyhcxXgtTSAPDNOUMRIGBJ",
+  while ((c = getopt_long(argc, argv, "a:d:p:l:n:L:m:e:r:u:w:i:k:z:W:C:E:F:o:Y:K:A:bZvsyhcxXgtTSPDNOUMRIGBJ",
                           uclient_long_opts, NULL)) != -1) {
     switch (c) {
     case 'J': {
