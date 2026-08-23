@@ -559,7 +559,6 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
       unsigned int hmac_len;
       password_t pwdtmp;
       SHATYPE shatype = SHATYPE_ERROR;
-      stun_password_algorithm_t password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
 
       hmac[0] = 0;
 
@@ -570,30 +569,11 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
         return -1;
       }
 
-      stun_attr_ref pa_attr = stun_attr_get_first_by_type_str(ioa_network_buffer_data(nbh),
-                                                              ioa_network_buffer_get_size(nbh),
-                                                              STUN_ATTRIBUTE_PASSWORD_ALGORITHM);
-      if (pa_attr) {
-        if (!stun_attr_get_password_algorithm(pa_attr, &password_algorithm)) {
-          clean_secrets_list(&sl);
-          return -1;
-        }
-      }
-
-      /* Determine the REST HMAC algorithm order.
-       * With PA negotiation, the peer tells us which password algorithm it expects.
-       * Without PA negotiation we follow the configured list, defaulting to
-       * SHA1 then SHA256 for backwards compatibility. */
-      const bool pa_negotiated = (pa_attr != NULL);
-      const SHATYPE rest_hmac_shatype = pa_negotiated
-          ? ((password_algorithm == STUN_PASSWORD_ALGORITHM_SHA256) ? SHATYPE_SHA256 : SHATYPE_SHA1)
-          : SHATYPE_ERROR;
+      /* Try REST HMAC hashes in configured order (default: SHA1 then SHA256).
+       * Password key derivation remains MD5 for compatibility with user DB data. */
 
       for (size_t sha_pass = 0; ret != 0 && (sha_pass < turn_params.rest_api_sha_algorithms_count); ++sha_pass) {
         SHATYPE cur_rest_shatype = turn_params.rest_api_sha_algorithms[sha_pass];
-        if (pa_negotiated && (cur_rest_shatype != rest_hmac_shatype)) {
-          continue;
-        }
         hmac_len = (cur_rest_shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES :
                    ((cur_rest_shatype == SHATYPE_SHA384) ? SHA384SIZEBYTES :
                     ((cur_rest_shatype == SHATYPE_SHA512) ? SHA512SIZEBYTES : SHA1SIZEBYTES));
@@ -612,7 +592,7 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
                   free(pwd);
                 } else {
                   if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key,
-                                                     password_algorithm)) {
+                                                     STUN_PASSWORD_ALGORITHM_MD5)) {
                     if (stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, ioa_network_buffer_data(nbh),
                                                                 ioa_network_buffer_get_size(nbh), key, pwdtmp, shatype) >
                         0) {
