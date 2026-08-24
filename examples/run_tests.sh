@@ -184,6 +184,74 @@ run_uclient() {
     fi
 }
 
+build_rest_sha256_credentials() {
+    local userid="$1"
+    local shared_secret="$2"
+
+    REST_USER="$(( $(date +%s) + 600 )):${userid}"
+
+    if command -v openssl >/dev/null 2>&1; then
+        REST_PWD=$(printf '%s' "$REST_USER" | openssl dgst -sha256 -hmac "$shared_secret" -binary | openssl base64 -A)
+        return $?
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        REST_PWD=$(python3 - <<'PY' "$REST_USER" "$shared_secret"
+import base64
+import hashlib
+import hmac
+import sys
+user = sys.argv[1].encode('utf-8')
+secret = sys.argv[2].encode('utf-8')
+print(base64.b64encode(hmac.new(secret, user, hashlib.sha256).digest()).decode('ascii'), end='')
+PY
+)
+        return $?
+    fi
+
+    echo "FAIL: need openssl or python3 to generate SHA256 REST credentials"
+    return 1
+}
+
+run_uclient_with_creds() {
+    local label="$1"
+    local username="$2"
+    local password="$3"
+    shift 3
+    echo "Running $label"
+    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -w "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
+    if grep -q "tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000" "$UCLIENT_LOG"; then
+        echo OK
+    else
+        echo FAIL
+        diagnose_failure "$label"
+        exit 1
+    fi
+}
+
+run_uclient_expect_fail_with_creds() {
+    local label="$1"
+    local username="$2"
+    local password="$3"
+    shift 3
+    echo "Running $label"
+    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -w "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
+    if grep -q "tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000" "$UCLIENT_LOG"; then
+        echo FAIL
+        echo "Unexpected success for negative test: $label"
+        diagnose_failure "$label"
+        exit 1
+    fi
+    if grep -qiE "401|unauthor|integrity|error" "$UCLIENT_LOG"; then
+        echo OK
+    else
+        echo FAIL
+        echo "Negative test did not show an auth failure signature: $label"
+        diagnose_failure "$label"
+        exit 1
+    fi
+}
+
 # Legacy single-threaded uclient (no -K, no --sender-threads).
 run_uclient "turn client TCP"   -t
 run_uclient "turn client TLS"   -t -S
@@ -204,6 +272,14 @@ run_uclient "turn client TCP (threaded)"  -t      --listener-threads 1 --sender-
 run_uclient "turn client TLS (threaded)"  -t -S   --listener-threads 1 --sender-threads 1
 run_uclient "turn client UDP (threaded)"          --listener-threads 1 --sender-threads 1
 run_uclient "turn client DTLS (threaded)" -S      --listener-threads 1 --sender-threads 1
+
+# Shared-secret SHA256 validation:
+# 1) password derived via HMAC-SHA256(secret, "timestamp:user") should work,
+# 2) same username with a different secret should fail authentication.
+build_rest_sha256_credentials "user" "secret" || exit 1
+run_uclient_with_creds "turn client UDP (REST shared-secret sha256)" "$REST_USER" "$REST_PWD"
+build_rest_sha256_credentials "user" "badsecret" || exit 1
+run_uclient_expect_fail_with_creds "turn client UDP (REST shared-secret sha256 wrong secret)" "$REST_USER" "$REST_PWD"
 
 # Linux-only load-gen smoke. Confirms -Y packet mode emits the recv_pps
 # metric introduced in #1913 alongside send_pps, and that both are

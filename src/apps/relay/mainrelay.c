@@ -40,6 +40,7 @@
 #include "ns_turn_ratelimit.h"
 #include "prom_server.h"
 #include <assert.h>
+#include <ctype.h>
 #include <limits.h>
 
 #if defined(WINDOWS)
@@ -204,6 +205,8 @@ turn_params_t turn_params = {
     0,                                  /* server_relay */
     0,                                  /* fingerprint */
     ':',                                /* rest_api_separator */
+    {SHATYPE_SHA1, SHATYPE_SHA256},      /* rest_api_sha_algorithms */
+    2,                                  /* rest_api_sha_algorithms_count */
     STUN_DEFAULT_NONCE_EXPIRATION_TIME, /* stale_nonce */
     STUN_DEFAULT_MAX_ALLOCATE_LIFETIME, /* max_allocate_lifetime */
     STUN_DEFAULT_CHANNEL_LIFETIME,      /* channel_lifetime */
@@ -299,6 +302,56 @@ static void reload_ssl_certs(evutil_socket_t sock, short events, void *args);
 
 static void shutdown_handler(evutil_socket_t sock, short events, void *args);
 static void drain_handler(evutil_socket_t sock, short events, void *args);
+
+static bool parse_rest_api_sha_algorithms(const char *value, SHATYPE *algorithms, size_t max_count, size_t *count) {
+  if (!value || !algorithms || !count || (max_count < 1)) {
+    return false;
+  }
+
+  char *work = turn_strdup(value);
+  if (!work) {
+    return false;
+  }
+
+  size_t parsed = 0;
+  char *saveptr = NULL;
+  for (char *token = strtok_r(work, ",", &saveptr); token; token = strtok_r(NULL, ",", &saveptr)) {
+    while (*token && isspace((unsigned char)*token)) {
+      ++token;
+    }
+
+    char *end = token + strlen(token);
+    while ((end > token) && isspace((unsigned char)end[-1])) {
+      --end;
+    }
+    *end = '\0';
+
+    SHATYPE parsed_type = SHATYPE_ERROR;
+    if (!strcasecmp(token, "sha1") || !strcasecmp(token, "sha-1")) {
+      parsed_type = SHATYPE_SHA1;
+    } else if (!strcasecmp(token, "sha256") || !strcasecmp(token, "sha-256")) {
+      parsed_type = SHATYPE_SHA256;
+    } else {
+      parsed = 0;
+      break;
+    }
+
+    if ((parsed >= max_count) || (parsed_type == SHATYPE_ERROR)) {
+      parsed = 0;
+      break;
+    }
+
+    algorithms[parsed++] = parsed_type;
+  }
+
+  free(work);
+  if (parsed < 1) {
+    return false;
+  }
+
+  *count = parsed;
+  return true;
+}
 
 //////////////////////////////////////////////////
 
@@ -1206,6 +1259,7 @@ static char Usage[] =
     "						by a separate program, so this is why it is 'dynamic'.\n"
     "						Multiple shared secrets can be used (both in the database and in the "
     "\"static\" fashion).\n"
+    "						Use --rest-api-sha-algorithms to choose accepted digest algorithms.\n"
     " --no-auth-pings				Disable periodic health checks to 'dynamic' auth secret tables.\n"
     " --no-dynamic-ip-list				Do not use dynamic allowed/denied peer ip list.\n"
     " --no-dynamic-realms				Do not use dynamic realm assignment and options.\n"
@@ -1329,6 +1383,9 @@ static char Usage[] =
     " -C, --rest-api-separator	<SYMBOL>	This is the timestamp/username separator symbol (character) in TURN "
     "REST API.\n"
     "						The default value is ':'.\n"
+    " --rest-api-sha-algorithms <sha1|sha256|sha1,sha256>\n"
+    "						Comma-separated list of accepted digest algorithms for TURN REST shared-secret auth.\n"
+    "						Default is 'sha1,sha256'.\n"
     " --max-allocate-timeout=<seconds>		Max time, in seconds, allowed for full allocation establishment. "
     "Default is 60.\n"
     " --drain-min-allocations=<number>		In drain mode (SIGUSR1), shut down once the number of active "
@@ -1590,6 +1647,7 @@ enum EXTRA_OPTS {
   PROMETHEUS_CERT_OPT,
   PROMETHEUS_KEY_OPT,
   AUTH_SECRET_OPT,
+  REST_API_SHA_ALGORITHMS_OPT,
   NO_AUTH_PINGS_OPT,
   NO_DYNAMIC_IP_LIST_OPT,
   NO_DYNAMIC_REALMS_OPT,
@@ -1788,6 +1846,7 @@ static const struct myoption long_options[] = {
     {"tcp-alternate-server", required_argument, NULL, TCP_ALTERNATE_SERVER_OPT},
     {"udp-alternate-server", required_argument, NULL, UDP_ALTERNATE_SERVER_OPT},
     {"rest-api-separator", required_argument, NULL, 'C'},
+    {"rest-api-sha-algorithms", required_argument, NULL, REST_API_SHA_ALGORITHMS_OPT},
     {"max-allocate-timeout", required_argument, NULL, MAX_ALLOCATE_TIMEOUT_OPT},
     {"drain-min-allocations", required_argument, NULL, DRAIN_MIN_ALLOCATIONS_OPT},
     {"no-multicast-peers", optional_argument, NULL, NO_MULTICAST_PEERS_OPT},
@@ -2684,6 +2743,19 @@ static void set_option(int c, char *value) {
       turn_params.rest_api_separator = *value;
     }
     break;
+  case REST_API_SHA_ALGORITHMS_OPT: {
+    SHATYPE algorithms[4] = {SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR, SHATYPE_ERROR};
+    size_t count = 0;
+    if (!value || !parse_rest_api_sha_algorithms(value, algorithms, 4, &count)) {
+      TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR,
+                    "CONFIG: invalid --rest-api-sha-algorithms value '%s'. Valid values: sha1|sha256|sha1,sha256.\n",
+                    (value ? value : ""));
+      exit(-1);
+    }
+    memcpy(turn_params.rest_api_sha_algorithms, algorithms, sizeof(algorithms[0]) * count);
+    turn_params.rest_api_sha_algorithms_count = count;
+    break;
+  }
   case LOG_BINDING_OPT:
     turn_params.log_binding = get_bool_value(value);
     break;

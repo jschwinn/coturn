@@ -312,6 +312,8 @@ typedef struct _turn_params_ {
   int server_relay;
   int fingerprint;
   char rest_api_separator;
+  SHATYPE rest_api_sha_algorithms[4];
+  size_t rest_api_sha_algorithms_count;
   vint stale_nonce;
   vint max_allocate_lifetime;
   vint channel_lifetime;

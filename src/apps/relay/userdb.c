@@ -485,6 +485,8 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
             return -1;
           }
 
+          /* Keep OAuth validation unchanged here: this dual-mode change is for
+             shared-secret REST auth only. */
           switch (dot.enc_block.key_length) {
           case SHA1SIZEBYTES:
             break;
@@ -556,62 +558,75 @@ int get_user_key(int in_oauth, int *out_oauth, int *max_session_time, uint8_t *u
       uint8_t hmac[MAXSHASIZE];
       unsigned int hmac_len;
       password_t pwdtmp;
+      SHATYPE shatype = SHATYPE_ERROR;
 
       hmac[0] = 0;
 
-      stun_attr_ref sar = stun_attr_get_first_by_type_str(
-          ioa_network_buffer_data(nbh), ioa_network_buffer_get_size(nbh), STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
+      stun_attr_ref sar = stun_attr_get_first_by_type_str(ioa_network_buffer_data(nbh), ioa_network_buffer_get_size(nbh),
+                                                          STUN_ATTRIBUTE_MESSAGE_INTEGRITY);
       if (!sar) {
         clean_secrets_list(&sl);
         return -1;
       }
 
-      const int sarlen = stun_attr_get_len(sar);
-      switch (sarlen) {
-      case SHA1SIZEBYTES:
-        hmac_len = SHA1SIZEBYTES;
-        break;
-      case SHA256SIZEBYTES:
-      case SHA384SIZEBYTES:
-      case SHA512SIZEBYTES:
-      default:
-        clean_secrets_list(&sl);
-        return -1;
-      };
+      {
+        const int sarlen = stun_attr_get_len(sar);
+        switch (sarlen) {
+        case SHA1SIZEBYTES:
+          shatype = SHATYPE_SHA1;
+          break;
+        case SHA256SIZEBYTES:
+          shatype = SHATYPE_SHA256;
+          break;
+        default:
+          clean_secrets_list(&sl);
+          return -1;
+        };
+      }
 
-      for (sll = 0; sll < get_secrets_list_size(&sl); ++sll) {
+      /* Try REST HMAC hashes in configured order (default: SHA1 then SHA256).
+       * Password key derivation remains MD5 for compatibility with user DB data. */
 
-        const char *secret = get_secrets_list_elem(&sl, sll);
+      for (size_t sha_pass = 0; ret != 0 && (sha_pass < turn_params.rest_api_sha_algorithms_count); ++sha_pass) {
+        SHATYPE cur_rest_shatype = turn_params.rest_api_sha_algorithms[sha_pass];
+        hmac_len = (cur_rest_shatype == SHATYPE_SHA256) ? SHA256SIZEBYTES :
+                   ((cur_rest_shatype == SHATYPE_SHA384) ? SHA384SIZEBYTES :
+                    ((cur_rest_shatype == SHATYPE_SHA512) ? SHA512SIZEBYTES : SHA1SIZEBYTES));
 
-        if (secret) {
-          if (stun_calculate_hmac(usname, strlen((char *)usname), (const uint8_t *)secret, strlen(secret), hmac,
-                                  &hmac_len, SHATYPE_DEFAULT)) {
-            size_t pwd_length = 0;
-            char *pwd = base64_encode(hmac, hmac_len, &pwd_length);
+        for (sll = 0; sll < get_secrets_list_size(&sl); ++sll) {
+          const char *secret = get_secrets_list_elem(&sl, sll);
 
-            if (pwd) {
-              if (pwd_length < 1) {
-                free(pwd);
-              } else {
-                if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key, SHATYPE_DEFAULT)) {
-                  if (stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, ioa_network_buffer_data(nbh),
-                                                              ioa_network_buffer_get_size(nbh), key, pwdtmp,
-                                                              SHATYPE_DEFAULT) > 0) {
+          if (secret) {
+            if (stun_calculate_hmac(usname, strlen((char *)usname), (const uint8_t *)secret, strlen(secret), hmac,
+                                    &hmac_len, cur_rest_shatype)) {
+              size_t pwd_length = 0;
+              char *pwd = base64_encode(hmac, hmac_len, &pwd_length);
 
-                    ret = 0;
+              if (pwd) {
+                if (pwd_length < 1) {
+                  free(pwd);
+                } else {
+                  if (stun_produce_integrity_key_str((uint8_t *)usname, realm, (uint8_t *)pwd, key, SHATYPE_DEFAULT)) {
+                    if (stun_check_message_integrity_by_key_str(TURN_CREDENTIALS_LONG_TERM, ioa_network_buffer_data(nbh),
+                                                                ioa_network_buffer_get_size(nbh), key, pwdtmp, shatype) >
+                        0) {
+
+                      ret = 0;
+                    }
                   }
-                }
-                free(pwd);
+                  free(pwd);
 
-                if (ret == 0) {
-                  break;
+                  if (ret == 0) {
+                    break;
+                  }
                 }
               }
             }
           }
         }
       }
-    }
+
+    } /* if (!turn_time_before) */
 
     clean_secrets_list(&sl);
 
