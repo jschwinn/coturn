@@ -1208,6 +1208,7 @@ static char Usage[] =
     "						by a separate program, so this is why it is 'dynamic'.\n"
     "						Multiple shared secrets can be used (both in the database and in the "
     "\"static\" fashion).\n"
+    "						Use --rest-api-sha-algorithms to choose accepted digest algorithms.\n"
     " --no-auth-pings				Disable periodic health checks to 'dynamic' auth secret tables.\n"
     " --no-dynamic-ip-list				Do not use dynamic allowed/denied peer ip list.\n"
     " --no-dynamic-realms				Do not use dynamic realm assignment and options.\n"
@@ -1331,6 +1332,9 @@ static char Usage[] =
     " -C, --rest-api-separator	<SYMBOL>	This is the timestamp/username separator symbol (character) in TURN "
     "REST API.\n"
     "						The default value is ':'.\n"
+    " --rest-api-sha-algorithms <sha1|sha256[,sha1|sha256]>\n"
+    "						Comma-separated list of accepted digest algorithms for TURN REST shared-secret auth.\n"
+    "						Default is 'sha1,sha256'.\n"
     " --max-allocate-timeout=<seconds>		Max time, in seconds, allowed for full allocation establishment. "
     "Default is 60.\n"
     " --drain-min-allocations=<number>		In drain mode (SIGUSR1), shut down once the number of active "
@@ -2693,7 +2697,7 @@ static void set_option(int c, char *value) {
     size_t count = 0;
     if (!value || !turn_parse_shatype_list(value, algorithms, 4, &count)) {
       TURN_LOG_FUNC(TURN_LOG_LEVEL_ERROR,
-                    "CONFIG: invalid --rest-api-sha-algorithms value '%s'. Valid values: sha1, sha256, sha384, sha512.\n",
+                    "CONFIG: invalid --rest-api-sha-algorithms value '%s'. Valid values: sha1|sha256|sha1,sha256.\n",
                     (value ? value : ""));
       exit(-1);
     }

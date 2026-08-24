@@ -212,10 +212,10 @@ bool turn_parse_shatype_list(const char *value, SHATYPE *algorithms, size_t max_
         parsed = SHATYPE_SHA1;
       } else if (!strcasecmp(cursor, "sha256") || !strcasecmp(cursor, "sha-256")) {
         parsed = SHATYPE_SHA256;
-      } else if (!strcasecmp(cursor, "sha384") || !strcasecmp(cursor, "sha-384")) {
-        parsed = SHATYPE_SHA384;
-      } else if (!strcasecmp(cursor, "sha512") || !strcasecmp(cursor, "sha-512")) {
-        parsed = SHATYPE_SHA512;
+      // } else if (!strcasecmp(cursor, "sha384") || !strcasecmp(cursor, "sha-384")) {
+      //   parsed = SHATYPE_SHA384;
+      // } else if (!strcasecmp(cursor, "sha512") || !strcasecmp(cursor, "sha-512")) {
+      //   parsed = SHATYPE_SHA512;
       }
 
       if (parsed == SHATYPE_ERROR) {
