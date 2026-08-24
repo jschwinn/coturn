@@ -219,7 +219,7 @@ run_uclient_with_creds() {
     local password="$3"
     shift 3
     echo "Running $label"
-    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -W "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
+    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -w "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
     if grep -q "tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000" "$UCLIENT_LOG"; then
         echo OK
     else
@@ -235,7 +235,7 @@ run_uclient_expect_fail_with_creds() {
     local password="$3"
     shift 3
     echo "Running $label"
-    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -W "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
+    $RUN_BOUNDED "$BINDIR/turnutils_uclient" "$@" -e 127.0.0.1 -X -g -u "$username" -w "$password" 127.0.0.1 > "$UCLIENT_LOG" 2>&1
     if grep -q "tot_send_bytes ~ 1000, tot_recv_bytes ~ 1000" "$UCLIENT_LOG"; then
         echo FAIL
         echo "Unexpected success for negative test: $label"
