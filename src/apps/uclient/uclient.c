@@ -1701,19 +1701,16 @@ static int process_received_buffer(app_ur_session *elem, int is_tcp_data, app_tc
       }
 
       return rc;
-    } else {
-      stun_challenge_options_t challenge_options;
-      if (stun_is_challenge_response_full_str(elem->in_buffer.buf, elem->in_buffer.len, &err_code, err_msg,
-                                              sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
-                                              clnet_info->server_name, &(clnet_info->oauth), &challenge_options)) {
-        apply_challenge_options(clnet_info, &challenge_options);
-        if (is_TCP_relay() && (stun_get_method(&(elem->in_buffer)) == STUN_METHOD_CONNECT)) {
-          turn_tcp_connect(clnet_verbose, &(elem->pinfo), &(elem->pinfo.peer_addr));
-        } else if (stun_get_method(&(elem->in_buffer)) == STUN_METHOD_REFRESH) {
-          refresh_channel(elem, stun_get_method(&elem->in_buffer), 600);
-        }
-        return rc;
+    } else if (stun_is_challenge_response_str(elem->in_buffer.buf, elem->in_buffer.len, &err_code, err_msg,
+                                               sizeof(err_msg), clnet_info->realm, clnet_info->nonce,
+                                               clnet_info->server_name, &(clnet_info->oauth))) {
+      if (is_TCP_relay() && (stun_get_method(&(elem->in_buffer)) == STUN_METHOD_CONNECT)) {
+        turn_tcp_connect(clnet_verbose, &(elem->pinfo), &(elem->pinfo.peer_addr));
+      } else if (stun_get_method(&(elem->in_buffer)) == STUN_METHOD_REFRESH) {
+        refresh_channel(elem, stun_get_method(&elem->in_buffer), 600);
       }
+      return rc;
+    }
     }
 
     if (stun_is_error_response(&(elem->in_buffer), NULL, NULL, 0)) {
@@ -3046,44 +3043,9 @@ void start_mclient(const char *remote_address, uint16_t port, const unsigned cha
 
 turn_credential_type get_turn_credentials_type(void) { return TURN_CREDENTIALS_LONG_TERM; }
 
-void apply_challenge_options(app_ur_conn_info *clnet_info, const stun_challenge_options_t *options) {
-  if (!clnet_info) {
-    return;
-  }
-
-  stun_init_challenge_options(&(clnet_info->challenge_options));
-  clnet_info->password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
-
-  if (!options) {
-    return;
-  }
-
-  clnet_info->challenge_options = *options;
-
-  if (options->password_algorithms_present) {
-    /* Choose the password algorithm that matches what the user configured.
-     * This matters for REST auth: the shared-secret HMAC must use the same
-     * hash as g_upwd was computed with (controlled by -A / shatype). */
-    if (shatype == SHATYPE_SHA256 &&
-        stun_password_algorithms_contains(&(options->password_algorithms), STUN_PASSWORD_ALGORITHM_SHA256)) {
-      clnet_info->password_algorithm = STUN_PASSWORD_ALGORITHM_SHA256;
-    } else if (stun_password_algorithms_contains(&(options->password_algorithms), STUN_PASSWORD_ALGORITHM_MD5)) {
-      clnet_info->password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
-    } else if (options->password_algorithms.count) {
-      clnet_info->password_algorithm = options->password_algorithms.algorithms[0];
-    }
-  }
-}
-
 int add_integrity(app_ur_conn_info *clnet_info, stun_buffer *message) {
   if (clnet_info->nonce[0]) {
-
-    const bool negotiated_password_algorithms = clnet_info->challenge_options.password_algorithms_present;
-    const SHATYPE auth_shatype = negotiated_password_algorithms ? SHATYPE_SHA256 : shatype;
-    stun_password_algorithm_t password_algorithm = clnet_info->password_algorithm;
-    if (!password_algorithm || (password_algorithm == STUN_PASSWORD_ALGORITHM_RESERVED)) {
-      password_algorithm = STUN_PASSWORD_ALGORITHM_MD5;
-    }
+    const SHATYPE auth_shatype = shatype;
 
     if (oauth && clnet_info->oauth) {
 
@@ -3147,17 +3109,8 @@ int add_integrity(app_ur_conn_info *clnet_info, stun_buffer *message) {
         }
       }
     } else {
-      if (negotiated_password_algorithms) {
-        if (!stun_attr_add_password_algorithms_str(message->buf, (size_t *)&(message->len),
-                                                   &(clnet_info->challenge_options.password_algorithms)) ||
-            !stun_attr_add_password_algorithm_str(message->buf, (size_t *)&(message->len), password_algorithm)) {
-          TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, " Cannot add PASSWORD-ALGORITHM attributes to the message\n");
-          return -1;
-        }
-      }
-
       if (!stun_attr_add_integrity_by_user_str(message->buf, (size_t *)&(message->len), g_uname, clnet_info->realm,
-                                               g_upwd, clnet_info->nonce, auth_shatype, password_algorithm)) {
+                                               g_upwd, clnet_info->nonce, auth_shatype, STUN_PASSWORD_ALGORITHM_MD5)) {
         TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, " Cannot add integrity to the message\n");
         return -1;
       }
@@ -3168,7 +3121,7 @@ int add_integrity(app_ur_conn_info *clnet_info, stun_buffer *message) {
 }
 
 int check_integrity(app_ur_conn_info *clnet_info, stun_buffer *message) {
-  SHATYPE sht = clnet_info->challenge_options.password_algorithms_present ? SHATYPE_SHA256 : shatype;
+  SHATYPE sht = shatype;
 
   if (oauth && clnet_info->oauth) {
 
@@ -3180,9 +3133,7 @@ int check_integrity(app_ur_conn_info *clnet_info, stun_buffer *message) {
   } else {
 
     if (stun_check_message_integrity_str(get_turn_credentials_type(), message->buf, (size_t)(message->len), g_uname,
-                                         clnet_info->realm, g_upwd, sht,
-                                         clnet_info->password_algorithm ? clnet_info->password_algorithm
-                                                                        : STUN_PASSWORD_ALGORITHM_MD5) < 1) {
+                                         clnet_info->realm, g_upwd, sht, STUN_PASSWORD_ALGORITHM_MD5) < 1) {
       TURN_LOG_FUNC(TURN_LOG_LEVEL_INFO, "Wrong integrity in a message received from server\n");
       return -1;
     }
