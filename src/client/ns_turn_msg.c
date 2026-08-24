@@ -733,143 +733,10 @@ bool stun_is_error_response_str(const uint8_t *buf, size_t len, int *err_code, u
   return false;
 }
 
-void stun_init_password_algorithms_attr(stun_password_algorithms_attr_t *algorithms) {
-  if (algorithms) {
-    memset(algorithms, 0, sizeof(*algorithms));
-  }
-}
-
-bool stun_password_algorithms_add(stun_password_algorithms_attr_t *algorithms, stun_password_algorithm_t algorithm) {
-  if (!algorithms || (algorithms->count >= STUN_MAX_PASSWORD_ALGORITHM_COUNT)) {
-    return false;
-  }
-
-  algorithms->algorithms[algorithms->count++] = algorithm;
-  return true;
-}
-
-bool stun_password_algorithms_contains(const stun_password_algorithms_attr_t *algorithms,
-                                       stun_password_algorithm_t algorithm) {
-  if (!algorithms) {
-    return false;
-  }
-
-  for (size_t i = 0; i < algorithms->count; ++i) {
-    if (algorithms->algorithms[i] == algorithm) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool stun_password_algorithms_equal(const stun_password_algorithms_attr_t *left,
-                                    const stun_password_algorithms_attr_t *right) {
-  if (!left || !right || (left->count != right->count)) {
-    return false;
-  }
-
-  for (size_t i = 0; i < left->count; ++i) {
-    if (left->algorithms[i] != right->algorithms[i]) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-void stun_init_challenge_options(stun_challenge_options_t *options) {
-  if (options) {
-    memset(options, 0, sizeof(*options));
-  }
-}
-
-static const char stun_nonce_cookie_b64_table[] =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-bool stun_nonce_cookie_build(uint32_t security_features, char cookie[STUN_NONCE_COOKIE_LENGTH + 1]) {
-  if (!cookie || (security_features > 0x00FFFFFFu)) {
-    return false;
-  }
-
-  memcpy(cookie, STUN_NONCE_COOKIE_PREFIX, STUN_NONCE_COOKIE_PREFIX_LENGTH);
-
-  const uint8_t bytes[3] = {(uint8_t)(security_features >> 16), (uint8_t)(security_features >> 8),
-                            (uint8_t)security_features};
-  cookie[9] = stun_nonce_cookie_b64_table[(bytes[0] >> 2) & 0x3F];
-  cookie[10] = stun_nonce_cookie_b64_table[((bytes[0] & 0x03) << 4) | ((bytes[1] >> 4) & 0x0F)];
-  cookie[11] = stun_nonce_cookie_b64_table[((bytes[1] & 0x0F) << 2) | ((bytes[2] >> 6) & 0x03)];
-  cookie[12] = stun_nonce_cookie_b64_table[bytes[2] & 0x3F];
-  cookie[13] = 0;
-
-  return true;
-}
-
-static int stun_nonce_cookie_b64_value(char c) {
-  if (c >= 'A' && c <= 'Z') {
-    return c - 'A';
-  }
-  if (c >= 'a' && c <= 'z') {
-    return c - 'a' + 26;
-  }
-  if (c >= '0' && c <= '9') {
-    return c - '0' + 52;
-  }
-  if (c == '+') {
-    return 62;
-  }
-  if (c == '/') {
-    return 63;
-  }
-  return -1;
-}
-
-bool stun_nonce_cookie_parse(const uint8_t *nonce, size_t nonce_len, uint32_t *security_features,
-                             const uint8_t **nonce_body, size_t *nonce_body_len) {
-  if (security_features) {
-    *security_features = 0;
-  }
-  if (nonce_body) {
-    *nonce_body = nonce;
-  }
-  if (nonce_body_len) {
-    *nonce_body_len = nonce_len;
-  }
-
-  if (!nonce || (nonce_len < STUN_NONCE_COOKIE_LENGTH) ||
-      memcmp(nonce, STUN_NONCE_COOKIE_PREFIX, STUN_NONCE_COOKIE_PREFIX_LENGTH) != 0) {
-    return false;
-  }
-
-  int v0 = stun_nonce_cookie_b64_value((char)nonce[9]);
-  int v1 = stun_nonce_cookie_b64_value((char)nonce[10]);
-  int v2 = stun_nonce_cookie_b64_value((char)nonce[11]);
-  int v3 = stun_nonce_cookie_b64_value((char)nonce[12]);
-  if ((v0 < 0) || (v1 < 0) || (v2 < 0) || (v3 < 0)) {
-    return false;
-  }
-
-  if (security_features) {
-    *security_features = (uint32_t)((v0 << 18) | (v1 << 12) | (v2 << 6) | v3);
-  }
-  if (nonce_body) {
-    *nonce_body = nonce + STUN_NONCE_COOKIE_LENGTH;
-  }
-  if (nonce_body_len) {
-    *nonce_body_len = nonce_len - STUN_NONCE_COOKIE_LENGTH;
-  }
-
-  return true;
-}
-
-bool stun_is_challenge_response_full_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
-                                         size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
-                                         bool *oauth, stun_challenge_options_t *options) {
+bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
+                                    size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
+                                    bool *oauth) {
   const bool ret = stun_is_error_response_str(buf, len, err_code, err_msg, err_msg_size);
-
-  if (options) {
-    stun_init_challenge_options(options);
-  }
 
   if (ret && (((*err_code) == 401) || ((*err_code) == 438))) {
     stun_attr_ref sar = stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_REALM);
@@ -914,19 +781,6 @@ bool stun_is_challenge_response_full_str(const uint8_t *buf, size_t len, int *er
             }
             memcpy(nonce, value, vlen);
             nonce[vlen] = 0;
-            if (options) {
-              uint32_t security_features = 0;
-              options->nonce_cookie_present =
-                  stun_nonce_cookie_parse(value, vlen, &security_features, NULL, NULL);
-              options->nonce_security_features = security_features;
-
-              stun_attr_ref pa_attr =
-                  stun_attr_get_first_by_type_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHMS);
-              if (pa_attr) {
-                options->password_algorithms_present =
-                    stun_attr_get_password_algorithms(pa_attr, &(options->password_algorithms));
-              }
-            }
             if (oauth) {
               *oauth = found_oauth;
             }
@@ -938,13 +792,6 @@ bool stun_is_challenge_response_full_str(const uint8_t *buf, size_t len, int *er
   }
 
   return false;
-}
-
-bool stun_is_challenge_response_str(const uint8_t *buf, size_t len, int *err_code, uint8_t *err_msg,
-                                    size_t err_msg_size, uint8_t *realm, uint8_t *nonce, uint8_t *server_name,
-                                    bool *oauth) {
-  return stun_is_challenge_response_full_str(buf, len, err_code, err_msg, err_msg_size, realm, nonce, server_name,
-                                             oauth, NULL);
 }
 
 bool stun_is_response_str(const uint8_t *buf, size_t len) {
@@ -1750,67 +1597,6 @@ band_limit_t stun_attr_get_bandwidth(stun_attr_ref attr) {
   return 0;
 }
 
-bool stun_attr_get_password_algorithm(stun_attr_ref attr, stun_password_algorithm_t *algorithm) {
-  if (!attr || !algorithm || (stun_attr_get_type(attr) != STUN_ATTRIBUTE_PASSWORD_ALGORITHM) ||
-      (stun_attr_get_len(attr) < 4)) {
-    return false;
-  }
-
-  const uint8_t *value = stun_attr_get_value(attr);
-  if (!value) {
-    return false;
-  }
-
-  if (turn_read_u16(value + 2) != 0) {
-    return false;
-  }
-
-  *algorithm = (stun_password_algorithm_t)turn_read_u16(value);
-  return (*algorithm == STUN_PASSWORD_ALGORITHM_MD5) || (*algorithm == STUN_PASSWORD_ALGORITHM_SHA256);
-}
-
-bool stun_attr_get_password_algorithms(stun_attr_ref attr, stun_password_algorithms_attr_t *algorithms) {
-  if (!attr || !algorithms || (stun_attr_get_type(attr) != STUN_ATTRIBUTE_PASSWORD_ALGORITHMS)) {
-    return false;
-  }
-
-  stun_init_password_algorithms_attr(algorithms);
-
-  const int attr_len = stun_attr_get_len(attr);
-  if ((attr_len < 4) || ((attr_len & 0x3) != 0)) {
-    return false;
-  }
-
-  const uint8_t *value = stun_attr_get_value(attr);
-  if (!value) {
-    return false;
-  }
-
-  for (int offset = 0; offset < attr_len;) {
-    const stun_password_algorithm_t algorithm = (stun_password_algorithm_t)turn_read_u16(value + offset);
-    const uint16_t params_len = turn_read_u16(value + offset + 2);
-    offset += 4;
-
-    int padded_params_len = params_len;
-    if (padded_params_len & 0x3) {
-      padded_params_len += 4 - (padded_params_len & 0x3);
-    }
-    if ((offset + padded_params_len) > attr_len) {
-      return false;
-    }
-
-    if ((algorithm == STUN_PASSWORD_ALGORITHM_MD5) || (algorithm == STUN_PASSWORD_ALGORITHM_SHA256)) {
-      if (!stun_password_algorithms_add(algorithms, algorithm)) {
-        return false;
-      }
-    }
-
-    offset += padded_params_len;
-  }
-
-  return algorithms->count > 0;
-}
-
 uint64_t stun_attr_get_reservation_token_value(stun_attr_ref attr) {
   if (attr) {
     const uint8_t *value = stun_attr_get_value(attr);
@@ -1976,31 +1762,6 @@ bool stun_attr_add_str(uint8_t *buf, size_t *len, uint16_t attr, const uint8_t *
   memset(attr_start + 4 + alen, 0, paddinglen);
 
   return true;
-}
-
-bool stun_attr_add_password_algorithm_str(uint8_t *buf, size_t *len, stun_password_algorithm_t algorithm) {
-  uint8_t value[4] = {0};
-  turn_write_u16(value, (uint16_t)algorithm);
-  turn_write_u16(value + 2, 0);
-  return stun_attr_add_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHM, value, sizeof(value));
-}
-
-bool stun_attr_add_password_algorithms_str(uint8_t *buf, size_t *len,
-                                           const stun_password_algorithms_attr_t *algorithms) {
-  if (!algorithms || !algorithms->count) {
-    return false;
-  }
-
-  const size_t raw_len = algorithms->count * 4;
-  uint8_t *value = (uint8_t *)turn_calloc(raw_len ? raw_len : 1, sizeof(uint8_t));
-  for (size_t i = 0; i < algorithms->count; ++i) {
-    turn_write_u16(value + (i * 4), (uint16_t)algorithms->algorithms[i]);
-    turn_write_u16(value + (i * 4) + 2, 0);
-  }
-
-  const bool ok = stun_attr_add_str(buf, len, STUN_ATTRIBUTE_PASSWORD_ALGORITHMS, value, (int)raw_len);
-  free(value);
-  return ok;
 }
 
 bool stun_attr_add_addr_str(uint8_t *buf, size_t *len, uint16_t attr_type, const ioa_addr *ca) {

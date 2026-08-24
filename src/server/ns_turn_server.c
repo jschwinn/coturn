@@ -1111,8 +1111,6 @@ static void turn_server_sweep_timed_events(turn_turnserver *server) {
   case STUN_ATTRIBUTE_FINGERPRINT:                                                                                     \
   case STUN_ATTRIBUTE_MESSAGE_INTEGRITY:                                                                               \
   case STUN_ATTRIBUTE_MESSAGE_INTEGRITY_SHA256:                                                                        \
-  case STUN_ATTRIBUTE_PASSWORD_ALGORITHM:                                                                              \
-  case STUN_ATTRIBUTE_PASSWORD_ALGORITHMS:                                                                             \
     break;                                                                                                             \
   case STUN_ATTRIBUTE_USERNAME:                                                                                        \
   case STUN_ATTRIBUTE_REALM:                                                                                           \
@@ -3597,7 +3595,6 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
                            int can_resume) {
   uint8_t usname[STUN_MAX_USERNAME_SIZE + 1];
   uint8_t nonce[STUN_MAX_NONCE_SIZE + 1];
-  uint8_t raw_nonce[NONCE_MAX_SIZE] = "";
   uint8_t realm[STUN_MAX_REALM_SIZE + 1];
   size_t alen = 0;
   SHATYPE mi_shatype = SHATYPE_DEFAULT;
@@ -3765,20 +3762,6 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
     memcpy(nonce, stun_attr_get_value(sar), alen);
     nonce[alen] = 0;
 
-    const uint8_t *presented_nonce = nonce;
-    size_t presented_nonce_len = alen;
-    if (stun_nonce_cookie_parse(nonce, alen, NULL, (const uint8_t **)&presented_nonce, &presented_nonce_len)) {
-      if (presented_nonce_len >= sizeof(raw_nonce)) {
-        *err_code = 400;
-        *reason = (const uint8_t *)"Nonce is too long";
-        return -1;
-      }
-      memcpy(raw_nonce, presented_nonce, presented_nonce_len);
-      raw_nonce[presented_nonce_len] = 0;
-    } else {
-      memcpy(raw_nonce, nonce, alen + 1);
-    }
-
     /* Stale Nonce check: */
 
     if (new_nonce) {
@@ -3790,15 +3773,15 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
        * nonce lifetime. */
       bool accepted = false;
       if (turn_server_stateless_nonce_enabled(server)) {
-        if (!strcmp((char *)ss->nonce, (char *)raw_nonce)) {
+        if (!strcmp((char *)ss->nonce, (char *)nonce)) {
           accepted = true;
         } else {
           const ioa_addr *raddr = get_remote_addr_from_ioa_socket(ss->client_socket);
           uint32_t issued_at = 0;
           if (raddr && turn_check_stateless_nonce(server->stateless_nonce_key, server->stateless_nonce_key_size, raddr,
                                                   (uint32_t)server->ctime, turn_server_stateless_nonce_lifetime(server),
-                                                  (const char *)raw_nonce, &issued_at)) {
-            STRCPY(ss->nonce, raw_nonce);
+                                                  (const char *)nonce, &issued_at)) {
+            STRCPY(ss->nonce, nonce);
             if (*(server->stale_nonce)) {
               /* Expire relative to the nonce's real issue time, matching what
                * the issuing challenge promised. */
@@ -3815,7 +3798,7 @@ static int check_stun_auth(turn_turnserver *server, ts_ur_super_session *ss, stu
       }
     }
 
-    if (strcmp((char *)ss->nonce, (char *)raw_nonce)) {
+    if (strcmp((char *)ss->nonce, (char *)nonce)) {
       *err_code = 438;
       *reason = (const uint8_t *)"Stale nonce";
       return create_challenge_response(ss, tid, resp_constructed, err_code, reason, nbh, method);
